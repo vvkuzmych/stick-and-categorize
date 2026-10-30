@@ -1,0 +1,206 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>STICK-1 Phase 1: Backend core, text only — C4 Architecture</title>
+<style>body{font-family:-apple-system,Segoe UI,sans-serif;max-width:1200px;margin:40px auto;padding:0 24px;color:#222;line-height:1.5}
+h2{border-bottom:1px solid #ddd;padding-bottom:6px;margin-top:48px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:8px;text-align:left;vertical-align:top}
+th{background:#f4f6f8}code{background:#f4f6f8;padding:1px 4px;border-radius:3px}pre:not(.mermaid){background:#f4f6f8;padding:12px;border-radius:6px;overflow:auto}
+.mermaid{background:#fafbfc;border:1px solid #e5e7eb;border-radius:8px;padding:16px;text-align:center}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin:16px 0}.card{border:1px solid #c8e6c9;border-left:6px solid #2e7d32;border-radius:8px;padding:16px 18px;background:#f6fbf6}.card.t2{border-left-style:dashed}.card h3{margin:6px 0 10px;font-size:1.1em}.card p{margin:8px 0}.card ul{margin:4px 0 8px;padding-left:20px}.card li{margin:3px 0}.card-head{display:flex;gap:8px;align-items:center}.badge{background:#2e7d32;color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px}.tier{font-size:12px;color:#1b5e20;border:1px solid #2e7d32;padding:1px 8px;border-radius:10px}.card.t2 .tier{border-style:dashed}.card .why{background:#fff8e1;border-radius:6px;padding:8px 10px}
+@media(max-width:900px){.cards{grid-template-columns:1fr}}</style></head><body><div id="out">Loading…</div>
+<script id="src" type="text/markdown">
+# STICK-1 Phase 1: Backend core, text only — C4 Architecture
+
+This page shows what Phase 1 adds to the backend: stored notes and categories, reachable over HTTP with plain text (no audio). Chosen option: a layered Python backend (Router → Services → Repository) on PostgreSQL, built test-first.
+
+## The idea in 30 seconds
+
+**Problem.** The backend today answers only `GET /health` (`backend/app/main.py:6-8`). It has no database code: no database libraries are listed (`backend/pyproject.toml:5-8`), the `DATABASE_URL` setting is not read by any code (`.env.example:2`), and the PostgreSQL container has no tables. Nothing can store or return a note.
+
+**Principle.** Each layer has one job: the Router handles HTTP, the services hold the rules, the Repository is the only code that writes SQL. The database enforces uniqueness, so repeated or parallel requests cannot create duplicates.
+
+**Result.** With `curl`, a developer can create a note with a client-made id, file it under a category, and list notes and categories. Sending the same note id twice returns the same note. "Work" and "work" are one category.
+
+## Legend
+
+| Style | Meaning |
+|---|---|
+| Green fill | New element |
+| Yellow fill | Changed element |
+| Grey fill | External system |
+| Solid thick border | Tier 1: required (all of Phase 1 is Tier 1; rough size: about one week for one developer) |
+| Dashed border | Tier 2: improvement that can follow in a separate PR (none in Phase 1) |
+
+## Level 1: System Context
+
+```mermaid
+flowchart TB
+  dev(["👤 Developer<br/>calls the API with curl"])
+  subgraph boundary["System boundary"]
+    sys["Stick backend<br/>stores notes and categories"]
+  end
+  app["Mac desktop app<br/>(Phase 3, not built yet)"]
+  dev -->|"HTTP: create and list notes"| sys
+  app -.->|"same HTTP API later"| sys
+  class dev person
+  class sys chT1
+  class app external
+  classDef person fill:#08427b,stroke:#052e56,color:#fff
+  classDef external fill:#999,stroke:#666,color:#fff
+  classDef newT1 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:3px
+  classDef newT2 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:2px,stroke-dasharray:6 4
+  classDef chT1 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:3px
+  classDef chT2 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:2px,stroke-dasharray:6 4
+```
+
+The backend already exists as a skeleton, so it is shown as changed. In Phase 1 only a developer uses it. The Mac app (Phase 3) will call the same API, which is why the API is designed for it now.
+
+## Level 2: Containers
+
+```mermaid
+flowchart LR
+  dev(["👤 Developer"])
+  subgraph be["Backend (Python)"]
+    api["Backend API<br/>FastAPI"]
+  end
+  subgraph store["Storage"]
+    pg[("PostgreSQL<br/>tables: categories, notes")]
+  end
+  dev -->|"POST /notes<br/>GET /notes<br/>GET /categories"| api
+  api -->|"SQL"| pg
+  class dev person
+  class api,pg chT1
+  classDef person fill:#08427b,stroke:#052e56,color:#fff
+  classDef external fill:#999,stroke:#666,color:#fff
+  classDef newT1 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:3px
+  classDef newT2 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:2px,stroke-dasharray:6 4
+  classDef chT1 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:3px
+  classDef chT2 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:2px,stroke-dasharray:6 4
+```
+
+No new container appears. Both existing ones change: the API gets three endpoints and database access, and PostgreSQL gets its first tables.
+
+## Level 3: Components
+
+Level 3 shows the Backend API, where all the new code goes.
+
+```mermaid
+flowchart TB
+  dev(["👤 Developer"])
+  subgraph api["Backend API (Python, FastAPI)"]
+    main["App entry (main.py)<br/>health + mounts router"]
+    router["Notes Router<br/>HTTP endpoints"]
+    notes["Note Service<br/>create, dedupe, list"]
+    cats["Category Service<br/>match name, create"]
+    repo["Repository<br/>SQL access"]
+    mig["Alembic Migration<br/>creates tables"]
+  end
+  pg[("PostgreSQL")]
+  dev -->|"HTTP"| main
+  main --> router
+  router --> notes
+  router --> cats
+  notes --> cats
+  notes --> repo
+  cats --> repo
+  repo -->|"SQL"| pg
+  mig -->|"DDL"| pg
+  class main chT1
+  class router,notes,cats,repo,mig newT1
+  class pg chT1
+  classDef person fill:#08427b,stroke:#052e56,color:#fff
+  class dev person
+  classDef external fill:#999,stroke:#666,color:#fff
+  classDef newT1 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:3px
+  classDef newT2 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:2px,stroke-dasharray:6 4
+  classDef chT1 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:3px
+  classDef chT2 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:2px,stroke-dasharray:6 4
+```
+
+- `GET /health` and its test keep working as before.
+- `main.py` changes only to mount the new router.
+- Everything else is new. The tests run against a real PostgreSQL, not a mock.
+
+## New elements (green boxes)
+
+Every green box on Level 3 has one card below. The evidence for "Why" is mostly that the code does not exist yet, so each card names the file that shows it.
+
+<div class="cards">
+<div class="card t1">
+<div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
+<h3>Notes Router</h3>
+<p class="what"><b>What it is.</b> The HTTP layer. It reads requests, calls the services and returns JSON.</p>
+<p class="why"><b>Why we add it.</b> The only route today is <code>/health</code> (<code>backend/app/main.py:6-8</code>). A developer, and later the Mac app, has no way to create or list notes.</p>
+<p><b>How it works.</b></p>
+<ul>
+<li><code>POST /notes</code> takes the text, an optional category name and the note id.</li>
+<li><code>GET /notes</code> and <code>GET /categories</code> return what is stored. An empty list is a valid answer.</li>
+<li>Holds no business rules. It only calls the services.</li>
+</ul>
+<p class="where"><b>Where.</b> <code>backend/app/api/notes.py</code> (planned path), mounted in <code>main.py</code>.</p>
+</div>
+<div class="card t1">
+<div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
+<h3>Note Service</h3>
+<p class="what"><b>What it is.</b> The place where a note is created and listed.</p>
+<p class="why"><b>Why we add it.</b> The app will retry uploads, and the note id is made by the client so a retry is safe. Nothing enforces one note per id: there is no note code or table (<code>backend/app/</code> holds only <code>main.py</code>).</p>
+<p><b>How it works.</b></p>
+<ul>
+<li>Creates a note with the id sent by the client.</li>
+<li>If the id already exists, returns the existing note and does not insert again.</li>
+<li>Asks Category Service for a category only when a name was given.</li>
+</ul>
+<p class="where"><b>Where.</b> <code>backend/app/domain/notes.py</code> (planned path).</p>
+</div>
+<div class="card t1">
+<div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
+<h3>Category Service</h3>
+<p class="what"><b>What it is.</b> Finds a category by name or creates it.</p>
+<p class="why"><b>Why we add it.</b> Categories will come from speech, so "Work", "work" and "Work " must be one category. There is no category code today (<code>backend/app/main.py</code> is the only module).</p>
+<p><b>How it works.</b></p>
+<ul>
+<li>Normalizes the name: ignores case and extra spaces.</li>
+<li>Calls "find or insert" in the Repository.</li>
+<li>Leans on the unique name in PostgreSQL, so two parallel requests cannot create two rows.</li>
+</ul>
+<p class="where"><b>Where.</b> <code>backend/app/domain/categories.py</code> (planned path).</p>
+</div>
+<div class="card t1">
+<div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
+<h3>Repository</h3>
+<p class="what"><b>What it is.</b> The only code that sends SQL to PostgreSQL.</p>
+<p class="why"><b>Why we add it.</b> No database library is a dependency yet (<code>backend/pyproject.toml:5-8</code>) and <code>DATABASE_URL</code> is read by no code (<code>.env.example:2</code>). Keeping SQL in one place also keeps the services simple.</p>
+<p><b>How it works.</b></p>
+<ul>
+<li>Four methods: save note, get note, list notes, find or insert category.</li>
+<li>Reads the connection string from <code>DATABASE_URL</code>.</li>
+<li>Adds the database libraries to the backend dependencies. Which libraries is not decided in the plan.</li>
+</ul>
+<p class="where"><b>Where.</b> <code>backend/app/db/</code> (planned path).</p>
+</div>
+<div class="card t1">
+<div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
+<h3>Alembic Migration</h3>
+<p class="what"><b>What it is.</b> A versioned script (Alembic is the usual Python migration tool) that creates the tables.</p>
+<p class="why"><b>Why we add it.</b> The PostgreSQL container starts empty: <code>docker-compose.yml:2-3</code> sets up only the server and the <code>stick</code> database (<code>.env.example:5</code>). Without tables nothing can be saved.</p>
+<p><b>How it works.</b></p>
+<ul>
+<li><code>categories</code>: id and a unique normalized name.</li>
+<li><code>notes</code>: id supplied by the client, text, nullable <code>category_id</code>, <code>created_at</code>.</li>
+<li>Run once with <code>alembic upgrade head</code>. Tests use the same migration.</li>
+</ul>
+<p class="where"><b>Where.</b> <code>backend/migrations/</code> and <code>backend/alembic.ini</code> (planned paths).</p>
+</div>
+</div>
+
+Full architecture document: [STICK-1: Voice stickies on the Mac desktop — C4 Architecture](STICK-1-c4.html).
+
+</script>
+<script type="module">
+import { marked } from "https://cdn.jsdelivr.net/npm/marked@12/lib/marked.esm.js";
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+const r=new marked.Renderer();const base=r.code.bind(r);
+r.code=(code,lang)=>{const t=typeof code==="object"?code.text:code;const l=typeof code==="object"?code.lang:lang;
+ if(l==="mermaid"){const p=document.createElement("pre");p.className="mermaid";p.textContent=t;return p.outerHTML;}return base(code,lang);};
+document.getElementById("out").innerHTML=marked.parse(document.getElementById("src").textContent,{renderer:r});
+mermaid.initialize({startOnLoad:false,theme:"default",securityLevel:"loose"});
+const els=[...document.querySelectorAll(".mermaid")];for(let i=0;i<els.length;i++){const el=els[i];const src=el.textContent;try{const {svg}=await mermaid.render("diag"+i,src);el.innerHTML=svg;el.setAttribute("data-processed","true");}catch(e){el.textContent="Syntax error: "+e.message;}}
+</script></body></html>
