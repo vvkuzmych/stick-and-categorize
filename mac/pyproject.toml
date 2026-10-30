@@ -1,0 +1,15 @@
+[project]
+name = "stick-mac"
+version = "0.0.0"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "pyobjc-framework-Cocoa",
+  "pyobjc-framework-Quartz",
+  "pyobjc-framework-AVFoundation",
+]
+
+[project.optional-dependencies]
+dev = ["py2app", "ruff>=0.8"]
+
+[tool.ruff]
+line-length = 100
