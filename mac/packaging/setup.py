@@ -1,17 +1,17 @@
-"""py2app build for the Phase 0 mic spike. Build (from mac/packaging): ../.venv/bin/python setup.py py2app"""
+"""py2app build of the menu-bar app. Build (from mac/packaging): ../.venv/bin/python setup.py py2app"""
 from setuptools import setup
 
 setup(
-    app=["../spikes/record_spike.py"],
+    app=["run_stick.py"],
     options={
         "py2app": {
             "plist": {
-                "CFBundleName": "StickSpike",
-                "CFBundleIdentifier": "dev.stick.spike",
+                "CFBundleName": "Stick",
+                "CFBundleIdentifier": "dev.stick.app",
                 "NSMicrophoneUsageDescription": "Stick records your voice notes.",
                 "LSUIElement": True,
             },
-            "packages": ["AVFoundation"],
+            "packages": ["stick", "AVFoundation"],
         }
     },
     setup_requires=["py2app"],
