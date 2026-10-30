@@ -9,7 +9,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["py2app", "ruff>=0.8"]
+dev = ["py2app", "pytest>=8", "ruff>=0.8"]
+
+[tool.setuptools.packages.find]
+include = ["stick*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100

@@ -1,0 +1,259 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>STICK-1 Phase 3: Mac app MVP — C4 Architecture</title>
+<style>body{font-family:-apple-system,Segoe UI,sans-serif;max-width:1200px;margin:40px auto;padding:0 24px;color:#222;line-height:1.5}
+h2{border-bottom:1px solid #ddd;padding-bottom:6px;margin-top:48px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:8px;text-align:left;vertical-align:top}
+th{background:#f4f6f8}code{background:#f4f6f8;padding:1px 4px;border-radius:3px}pre:not(.mermaid){background:#f4f6f8;padding:12px;border-radius:6px;overflow:auto}
+.mermaid{background:#fafbfc;border:1px solid #e5e7eb;border-radius:8px;padding:16px;text-align:center}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin:16px 0}.card{border:1px solid #c8e6c9;border-left:6px solid #2e7d32;border-radius:8px;padding:16px 18px;background:#f6fbf6}.card.t2{border-left-style:dashed}.card h3{margin:6px 0 10px;font-size:1.1em}.card p{margin:8px 0}.card ul{margin:4px 0 8px;padding-left:20px}.card li{margin:3px 0}.card-head{display:flex;gap:8px;align-items:center}.badge{background:#2e7d32;color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px}.tier{font-size:12px;color:#1b5e20;border:1px solid #2e7d32;padding:1px 8px;border-radius:10px}.card.t2 .tier{border-style:dashed}.card .why{background:#fff8e1;border-radius:6px;padding:8px 10px}
+@media(max-width:900px){.cards{grid-template-columns:1fr}}</style></head><body><div id="out">Loading…</div>
+<script id="src" type="text/markdown">
+# STICK-1 Phase 3: Mac app MVP — C4 Architecture
+
+This page shows what Phase 3 adds: the Mac menu-bar app that records a voice note, sends it to the backend and shows it as a sticky on the desktop. Chosen option: one Python app (PyObjC) that only records and draws, with all decisions left to the backend.
+
+## The idea in 30 seconds
+
+**Problem.** The backend can already turn audio into a note (`POST /notes/voice`, `backend/app/api/notes.py:62-92`), but nothing on the Mac uses it. The `mac/` folder holds three throwaway scripts: a sticky window with hard-coded text (`mac/spikes/panel_spike.py:69-70`), a hotkey that only prints (`mac/spikes/hotkey_spike.py:31-32`), and a recorder that records a fixed number of seconds (`mac/spikes/record_spike.py:28`). They are not connected, and there is no menu-bar app and no code that calls the backend.
+
+**Principle.** The app does only two jobs: capture audio and draw stickies. The backend decides text and category, and PostgreSQL is the single source of truth, so the app keeps no data of its own.
+
+**Result.** The user presses a hotkey, speaks, presses it again, and a sticky appears. After a quit and relaunch, the app asks the backend for all notes and draws every sticky again.
+
+## Legend
+
+| Style | Meaning |
+|---|---|
+| Green fill | New element |
+| Yellow fill | Changed element (none here) |
+| Grey fill | External system |
+| Solid thick border | Tier 1: required (all of Phase 3 is Tier 1; rough size: about one to two weeks for one developer) |
+| Dashed border | Tier 2: improvement that can follow in a separate PR (none in Phase 3) |
+
+## Level 1: System Context
+
+```mermaid
+flowchart TB
+  user(["👤 User<br/>speaks a note"])
+  subgraph boundary["System boundary"]
+    sys["Stick and Categorize<br/>voice note → desktop sticky"]
+  end
+  macos["macOS<br/>microphone, desktop, global hotkey"]
+  user -->|"hotkey + voice"| sys
+  sys -->|"shows stickies"| user
+  sys -->|"uses"| macos
+  class user person
+  class sys chT1
+  class macos external
+  classDef person fill:#08427b,stroke:#052e56,color:#fff
+  classDef external fill:#999,stroke:#666,color:#fff
+  classDef newT1 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:3px
+  classDef newT2 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:2px,stroke-dasharray:6 4
+  classDef chT1 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:3px
+  classDef chT2 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:2px,stroke-dasharray:6 4
+```
+
+For the first time an end user appears: before this phase only a developer used the system. The system gains a front end. It relies on macOS for the microphone, the desktop windows and the hotkey.
+
+## Level 2: Containers
+
+```mermaid
+flowchart LR
+  user(["👤 User"])
+  subgraph macapp["Mac client (Python)"]
+    app["Sticky Desktop App<br/>Python, PyObjC (AppKit)<br/>menu-bar app"]
+  end
+  subgraph be["Backend (Python)"]
+    api["Backend API<br/>FastAPI"]
+  end
+  subgraph store["Storage"]
+    pg[("PostgreSQL<br/>notes, categories")]
+  end
+  macos["macOS<br/>mic, desktop, hotkey"]
+  user -->|"hotkey + voice"| app
+  app -->|"records, draws panels"| macos
+  app -->|"POST /notes/voice<br/>GET /notes<br/>HTTP"| api
+  api -->|"SQL"| pg
+  class user person
+  class app newT1
+  class macos external
+  classDef person fill:#08427b,stroke:#052e56,color:#fff
+  classDef external fill:#999,stroke:#666,color:#fff
+  classDef newT1 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:3px
+  classDef newT2 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:2px,stroke-dasharray:6 4
+  classDef chT1 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:3px
+  classDef chT2 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:2px,stroke-dasharray:6 4
+```
+
+One new container: the app. The Backend API and PostgreSQL are used as they are, with no change. The app talks to the backend over plain HTTP, at an address the user sets in the settings.
+
+## Level 3: Components
+
+Level 3 shows the Sticky Desktop App, the only container that changes.
+
+```mermaid
+flowchart TB
+  user(["👤 User"])
+  subgraph app["Sticky Desktop App (Python, PyObjC)"]
+    shell["Menu-Bar Shell<br/>no Dock icon, settings"]
+    hotkey["Hotkey Listener<br/>start / stop"]
+    rec["Mic Recorder<br/>AVAudioEngine"]
+    client["API Client<br/>makes note id, uploads"]
+    sync["Launch Sync<br/>load all notes on start"]
+    place["Sticky Placement<br/>no overlap"]
+    win["Sticky Window<br/>NSPanel, plain text"]
+  end
+  api["Backend API"]
+  macos["macOS"]
+  user -->|"key press"| hotkey
+  shell -->|"starts"| hotkey
+  shell -->|"starts"| sync
+  hotkey -->|"toggle"| rec
+  rec -->|"audio file"| client
+  client -->|"HTTP"| api
+  client -->|"new note"| place
+  sync -->|"GET /notes"| client
+  sync -->|"all notes"| place
+  place --> win
+  win -->|"desktop level"| macos
+  rec -->|"mic permission"| macos
+  class shell,hotkey,rec,client,sync,place,win newT1
+  classDef newT1 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:3px
+  classDef person fill:#08427b,stroke:#052e56,color:#fff
+  class user person
+  classDef external fill:#999,stroke:#666,color:#fff
+  class macos external
+  classDef unchanged fill:#fff,stroke:#333,color:#000
+  class api unchanged
+  classDef newT2 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:2px,stroke-dasharray:6 4
+  classDef chT1 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:3px
+  classDef chT2 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:2px,stroke-dasharray:6 4
+```
+
+- Nothing in the app is shipped yet, so every box is new. The Phase 0 spikes stay as throwaway code and the good parts are rebuilt inside the app.
+- The backend API does not change: the app uses `POST /notes/voice` and `GET /notes` as they are.
+- Restart safety comes from Launch Sync: the app keeps no data, so a relaunch redraws everything from the backend.
+
+## New elements (green boxes)
+
+Every green box on Levels 2 and 3 has one card below. The Sticky Desktop App card covers the whole container. The other seven cards cover its parts.
+
+<div class="cards">
+<div class="card t1">
+<div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
+<h3>Sticky Desktop App</h3>
+<p class="what"><b>What it is.</b> A macOS menu-bar app written in Python with PyObjC (Python access to Apple's AppKit). It records the voice and draws the stickies. It has no Dock icon.</p>
+<p class="why"><b>Why we add it.</b> The backend voice endpoint has no client (<code>backend/app/api/notes.py:62-92</code>). In <code>mac/</code> there are only spike scripts, and the package metadata lists only PyObjC libraries (<code>mac/pyproject.toml:5-9</code>).</p>
+<p><b>How it works.</b></p>
+<ul>
+<li>Parts: shell, hotkey, recorder, API client, launch sync, placement and sticky window (cards below).</li>
+<li>Keeps no notes of its own. The backend is the source of truth.</li>
+<li>Plain text only for now: no colours, styling or web view.</li>
+</ul>
+<p class="where"><b>Where.</b> <code>mac/</code>, as a Python package built with py2app (build setup started in <code>mac/packaging/setup.py</code>).</p>
+</div>
+<div class="card t1">
+<div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
+<h3>Menu-Bar Shell</h3>
+<p class="what"><b>What it is.</b> The app's entry point: a menu-bar icon with a menu and a settings entry for the backend URL.</p>
+<p class="why"><b>Why we add it.</b> No code creates a menu-bar item or stores a setting: a search of <code>mac/spikes</code> for <code>NSStatusBar</code> and <code>NSUserDefaults</code> finds nothing. The spikes are run from the terminal with fixed arguments (<code>mac/spikes/panel_spike.py:62</code>).</p>
+<p><b>How it works.</b></p>
+<ul>
+<li>Runs without a Dock icon, as the spikes already do (<code>panel_spike.py:64</code>, <code>packaging/setup.py:12</code>).</li>
+<li>Menu: settings, quit. The backend URL is saved between runs.</li>
+<li>Starts the hotkey and the launch sync.</li>
+</ul>
+<p class="where"><b>Where.</b> <code>mac/stick/app.py</code> (planned path).</p>
+</div>
+<div class="card t1">
+<div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
+<h3>Hotkey Listener</h3>
+<p class="what"><b>What it is.</b> A global key combination that starts and stops recording from any app.</p>
+<p class="why"><b>Why we add it.</b> The spike hotkey only flips a flag and prints text (<code>mac/spikes/hotkey_spike.py:31-32</code>). It is not connected to the recorder.</p>
+<p><b>How it works.</b></p>
+<ul>
+<li>Listens for Ctrl+Option+Space as in the spike (<code>hotkey_spike.py:18-30</code>). The final key is not decided in the plan.</li>
+<li>First press starts recording, second press stops it.</li>
+<li>Needs the macOS Input Monitoring permission. Not verified in Phase 0.</li>
+</ul>
+<p class="where"><b>Where.</b> <code>mac/stick/hotkey.py</code> (planned path).</p>
+</div>
+<div class="card t1">
+<div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
+<h3>Mic Recorder</h3>
+<p class="what"><b>What it is.</b> Records the microphone with AVAudioEngine (Apple's audio API) between a start and a stop, and saves a file.</p>
+<p class="why"><b>Why we add it.</b> The spike records a fixed number of seconds in a blocking loop and then exits (<code>mac/spikes/record_spike.py:28</code>), and on denied permission it only quits with a message (<code>record_spike.py:31</code>). An app needs start and stop on demand and a message the user can read.</p>
+<p><b>How it works.</b></p>
+<ul>
+<li>Asks for microphone permission (<code>record_spike.py:12-24</code>). On denial it shows a clear message and does not crash.</li>
+<li>Start installs the audio tap and stop writes the file (<code>record_spike.py:41-47</code>).</li>
+<li>Hands the finished file to the API Client.</li>
+</ul>
+<p class="where"><b>Where.</b> <code>mac/stick/recorder.py</code> (planned path).</p>
+</div>
+<div class="card t1">
+<div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
+<h3>API Client</h3>
+<p class="what"><b>What it is.</b> The only code that talks HTTP to the backend. It uploads audio and fetches notes.</p>
+<p class="why"><b>Why we add it.</b> The backend needs a note id from the caller (<code>backend/app/api/notes.py:67</code>) so repeats are safe, and the app has no code that makes one or sends a request (a search of <code>mac/</code> for <code>uuid</code> and HTTP libraries finds nothing).</p>
+<p><b>How it works.</b></p>
+<ul>
+<li>Makes the note id before the upload and reuses it on every retry, so a retry cannot create a duplicate.</li>
+<li><code>POST /notes/voice</code> with the audio and id. 201 and 200 both mean "note saved".</li>
+<li><code>GET /notes</code> for the launch sync. The backend URL comes from the settings.</li>
+</ul>
+<p class="where"><b>Where.</b> <code>mac/stick/api.py</code> (planned path). The HTTP library is not chosen in the plan.</p>
+</div>
+<div class="card t1">
+<div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
+<h3>Launch Sync</h3>
+<p class="what"><b>What it is.</b> On start, the app loads every note from the backend and draws one sticky for each.</p>
+<p class="why"><b>Why we add it.</b> Stickies are windows, so they vanish when the app quits. Nothing today redraws them: the spike hard-codes two stickies (<code>mac/spikes/panel_spike.py:69-70</code>).</p>
+<p><b>How it works.</b></p>
+<ul>
+<li>Calls <code>GET /notes</code> through the API Client.</li>
+<li>Passes the notes to Sticky Placement, then to Sticky Window.</li>
+<li>Runs once at launch, so there is nothing to keep in sync while running.</li>
+</ul>
+<p class="where"><b>Where.</b> <code>mac/stick/sync.py</code> (planned path).</p>
+</div>
+<div class="card t1">
+<div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
+<h3>Sticky Placement</h3>
+<p class="what"><b>What it is.</b> Chooses where each sticky goes so that stickies do not overlap.</p>
+<p class="why"><b>Why we add it.</b> The spike places two stickies at fixed positions side by side (<code>mac/spikes/panel_spike.py:69-70</code>). With many notes, or after a relaunch, fixed positions would stack stickies on top of each other.</p>
+<p><b>How it works.</b></p>
+<ul>
+<li>Takes the screen's visible area, the sticky size and the existing positions.</li>
+<li>Returns the next free spot.</li>
+<li>Pure code with no AppKit calls, so it can be tested without a screen.</li>
+</ul>
+<p class="where"><b>Where.</b> <code>mac/stick/placement.py</code> (planned path).</p>
+</div>
+<div class="card t1">
+<div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
+<h3>Sticky Window</h3>
+<p class="what"><b>What it is.</b> One borderless AppKit panel (<code>NSPanel</code>) per note, showing the text and the category label.</p>
+<p class="why"><b>Why we add it.</b> The spike's <code>make_sticky</code> is a hard-coded demo with a bracketed label (<code>mac/spikes/panel_spike.py:29-58</code>). The app needs it as a reusable piece that takes a note. Whether it survives a Space switch was not checked in Phase 0.</p>
+<p><b>How it works.</b></p>
+<ul>
+<li>Desktop level and all Spaces, as in the spike (<code>panel_spike.py:41-46</code>).</li>
+<li>Shows the text and, if there is one, the category.</li>
+<li>Plain text only. No editing, colours or styling.</li>
+</ul>
+<p class="where"><b>Where.</b> <code>mac/stick/sticky.py</code> (planned path), grown from <code>mac/spikes/panel_spike.py</code>.</p>
+</div>
+</div>
+
+Full architecture document: [STICK-1: Voice stickies on the Mac desktop — C4 Architecture](STICK-1-c4.html).
+
+</script>
+<script type="module">
+import { marked } from "https://cdn.jsdelivr.net/npm/marked@12/lib/marked.esm.js";
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+const r=new marked.Renderer();const base=r.code.bind(r);
+r.code=(code,lang)=>{const t=typeof code==="object"?code.text:code;const l=typeof code==="object"?code.lang:lang;
+ if(l==="mermaid"){const p=document.createElement("pre");p.className="mermaid";p.textContent=t;return p.outerHTML;}return base(code,lang);};
+document.getElementById("out").innerHTML=marked.parse(document.getElementById("src").textContent,{renderer:r});
+mermaid.initialize({startOnLoad:false,theme:"default",securityLevel:"loose"});
+const els=[...document.querySelectorAll(".mermaid")];for(let i=0;i<els.length;i++){const el=els[i];const src=el.textContent;try{const {svg}=await mermaid.render("diag"+i,src);el.innerHTML=svg;el.setAttribute("data-processed","true");}catch(e){el.textContent="Syntax error: "+e.message;}}
+</script></body></html>
