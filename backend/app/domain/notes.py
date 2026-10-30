@@ -21,5 +21,8 @@ class NoteService:
         self.repo.session.refresh(note)
         return note, created
 
+    def get(self, note_id: uuid.UUID) -> Note | None:
+        return self.repo.get_note(note_id)
+
     def list(self) -> list[Note]:
         return self.repo.list_notes()

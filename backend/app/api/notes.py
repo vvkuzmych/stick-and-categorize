@@ -1,16 +1,21 @@
+import tempfile
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
+from app.api.limits import MAX_AUDIO_BYTES, AudioRejected, check_duration, check_size
 from app.db.models import Note
 from app.db.repository import Repository
 from app.db.session import get_session
 from app.domain.categories import CategoryService
 from app.domain.notes import NoteService
+from app.domain.voice import EmptyTranscript, VoiceNoteService
+from app.speech.transcriber import Transcriber
 
 router = APIRouter()
 
@@ -51,6 +56,35 @@ def get_services(session: Annotated[Session, Depends(get_session)]) -> tuple[Not
 
 
 Services = Annotated[tuple[NoteService, CategoryService], Depends(get_services)]
+
+
+def get_transcriber(request: Request) -> Transcriber:
+    return request.app.state.transcriber
+
+
+@router.post("/notes/voice", response_model=NoteOut, status_code=201)
+def create_voice_note(
+    id: Annotated[uuid.UUID, Form()],
+    audio: Annotated[UploadFile, File()],
+    response: Response,
+    services: Services,
+    transcriber: Annotated[Transcriber, Depends(get_transcriber)],
+) -> NoteOut:
+    data = audio.file.read(MAX_AUDIO_BYTES + 1)
+    try:
+        check_size(len(data))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "clip"
+            path.write_bytes(data)
+            check_duration(path)
+            note, created = VoiceNoteService(transcriber, services[0]).create(id, path)
+    except AudioRejected as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
+    except EmptyTranscript as exc:
+        raise HTTPException(422, "No speech was found in the audio.") from exc
+    if not created:
+        response.status_code = 200
+    return NoteOut.of(note)
 
 
 @router.post("/notes", response_model=NoteOut, status_code=201)

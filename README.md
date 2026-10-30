@@ -8,7 +8,7 @@ Python 3.13 everywhere.
     cp .env.example .env
     docker compose up -d db                      # or: brew install postgresql@16
 
-    cd backend && python3.13 -m venv .venv && .venv/bin/pip install -e ".[dev,spikes]"
+    cd backend && python3.13 -m venv .venv && .venv/bin/pip install -e ".[dev]"
     .venv/bin/pytest && .venv/bin/ruff check .
     .venv/bin/python spikes/transcribe_spike.py CLIP.wav small     # spike B
 
