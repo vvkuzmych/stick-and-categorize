@@ -8,18 +8,22 @@ dependencies = [
   "sqlalchemy>=2.0",
   "psycopg[binary]>=3.2",
   "alembic>=1.14",
+  "python-multipart>=0.0.9",
+  # av must stay below 19: 19.0.2 fails with faster-whisper 1.2.1.
+  "faster-whisper==1.2.1",
+  "av<19",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.8"]
-# Spike B only. `av` must be pinned: 19.0.2 fails with faster-whisper 1.2.1.
-spikes = ["faster-whisper==1.2.1", "av<19"]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not slow'"
+markers = ["slow: needs the real Whisper model (run with -m slow)"]
 
 [tool.ruff]
 line-length = 100
