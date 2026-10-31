@@ -1,3 +1,4 @@
+import logging
 import tempfile
 import uuid
 from datetime import datetime
@@ -15,9 +16,11 @@ from app.db.session import get_session
 from app.domain.categories import CategoryService
 from app.domain.notes import NoteService
 from app.domain.voice import EmptyTranscript, VoiceNoteService
+from app.log import Timer
 from app.speech.transcriber import Transcriber
 
 router = APIRouter()
+logger = logging.getLogger("stick.voice")
 
 
 class NoteIn(BaseModel):
@@ -71,17 +74,25 @@ def create_voice_note(
     transcriber: Annotated[Transcriber, Depends(get_transcriber)],
 ) -> NoteOut:
     data = audio.file.read(MAX_AUDIO_BYTES + 1)
+    timer = Timer()
     try:
         check_size(len(data))
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "clip"
             path.write_bytes(data)
             check_duration(path)
-            note, created = VoiceNoteService(transcriber, services[0]).create(id, path)
+            with timer:
+                note, created = VoiceNoteService(transcriber, services[0]).create(id, path)
     except AudioRejected as exc:
+        logger.warning("voice note %s rejected: %s", id, exc.detail)
         raise HTTPException(exc.status_code, exc.detail) from exc
     except EmptyTranscript as exc:
+        logger.warning("voice note %s: no speech found", id)
         raise HTTPException(422, "No speech was found in the audio.") from exc
+    logger.info(
+        "voice note %s %s in %.1f s, category=%s",
+        id, "created" if created else "already existed", timer.seconds, note.category and note.category.name,
+    )
     if not created:
         response.status_code = 200
     return NoteOut.of(note)

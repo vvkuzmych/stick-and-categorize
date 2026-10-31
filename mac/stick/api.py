@@ -10,6 +10,7 @@ from pathlib import Path
 
 TIMEOUT_SECONDS = 60  # a voice upload includes transcription
 RETRIES = 2
+HEALTH_TIMEOUT_SECONDS = 3
 
 
 class ApiError(Exception):
@@ -71,6 +72,14 @@ class ApiClient:
     def list_notes(self) -> list[Note]:
         return [Note.from_json(n) for n in self._request("GET", "/notes")]
 
+    def is_up(self) -> bool:
+        """True if the backend answers /health with 200 (which includes its database)."""
+        try:
+            self._request("GET", "/health", timeout=HEALTH_TIMEOUT_SECONDS)
+        except ApiError:
+            return False
+        return True
+
     def upload_voice(self, note_id: str, audio: Path) -> Note:
         """Retries reuse `note_id`, so a retry cannot create a duplicate sticky."""
         body, content_type = multipart({"id": note_id}, "audio", audio)
@@ -85,12 +94,12 @@ class ApiClient:
         assert last is not None
         raise last
 
-    def _request(self, method: str, path: str, body: bytes | None = None, headers=None):
+    def _request(self, method, path, body=None, headers=None, timeout=TIMEOUT_SECONDS):
         request = urllib.request.Request(
             self.base_url + path, data=body, method=method, headers=headers or {}
         )
         try:
-            with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
             raise ApiError(_detail(exc), exc.code) from exc

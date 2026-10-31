@@ -21,6 +21,7 @@ from PyObjCTools import AppHelper
 
 from stick import settings
 from stick.api import ApiClient, ApiError, new_note_id
+from stick.connection import ConnectionMonitor
 from stick.hotkey import HotkeyListener
 from stick.recorder import DENIED_MESSAGE, Recorder, ensure_permission
 from stick.sticky import StickyBoard
@@ -56,6 +57,7 @@ class Controller:
         self.client = ApiClient(settings.get_backend_url())
         self.hotkey = HotkeyListener(self.toggle)
         self.busy = 0  # uploads in flight
+        self.monitor = ConnectionMonitor(lambda: self.client.is_up(), self.on_connection)
         self.menu_target = MenuTarget.alloc().initWithController_(self)
 
     # ---- menu bar ----
@@ -88,7 +90,19 @@ class Controller:
         if box.runModal() == 1000:  # first button
             settings.set_backend_url(str(field.stringValue()))
             self.client = ApiClient(settings.get_backend_url())
-            self.sync()
+            self.monitor.check_now()
+
+    # ---- connection ----
+    def on_connection(self, online: bool) -> None:
+        """Called from the monitor thread. Back online means: redraw from the backend."""
+        if online:
+            AppHelper.callAfter(self.sync)
+        else:
+            AppHelper.callAfter(self.show_offline)
+
+    def show_offline(self) -> None:
+        self.item.button().setTitle_("⚠️")
+        self.set_status("Backend offline - trying again")
 
     # ---- launch sync ----
     def sync(self) -> None:
@@ -106,6 +120,7 @@ class Controller:
 
     def _synced(self, notes) -> None:
         self.board.show_all(notes)
+        self.item.button().setTitle_("📝")
         self.set_status("Ready")
 
     # ---- recording ----
@@ -168,7 +183,7 @@ def main() -> None:
     controller.build_menu()
     if not controller.hotkey.start():
         controller.set_status("Hotkey not available (check Input Monitoring)")
-    controller.sync()
+    controller.monitor.start()  # runs the launch sync as soon as the backend answers
     quit_after = os.environ.get("STICK_QUIT_AFTER")  # for smoke tests
     if quit_after:
         NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
