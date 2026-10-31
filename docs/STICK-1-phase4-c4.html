@@ -1,0 +1,210 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>STICK-1 Phase 4: Hardening and packaging — C4 Architecture</title>
+<style>body{font-family:-apple-system,Segoe UI,sans-serif;max-width:1200px;margin:40px auto;padding:0 24px;color:#222;line-height:1.5}
+h2{border-bottom:1px solid #ddd;padding-bottom:6px;margin-top:48px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:8px;text-align:left;vertical-align:top}
+th{background:#f4f6f8}code{background:#f4f6f8;padding:1px 4px;border-radius:3px}pre:not(.mermaid){background:#f4f6f8;padding:12px;border-radius:6px;overflow:auto}
+.mermaid{background:#fafbfc;border:1px solid #e5e7eb;border-radius:8px;padding:16px;text-align:center}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin:16px 0}.card{border:1px solid #c8e6c9;border-left:6px solid #2e7d32;border-radius:8px;padding:16px 18px;background:#f6fbf6}.card.t2{border-left-style:dashed}.card h3{margin:6px 0 10px;font-size:1.1em}.card p{margin:8px 0}.card ul{margin:4px 0 8px;padding-left:20px}.card li{margin:3px 0}.card-head{display:flex;gap:8px;align-items:center}.badge{background:#2e7d32;color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px}.tier{font-size:12px;color:#1b5e20;border:1px solid #2e7d32;padding:1px 8px;border-radius:10px}.card.t2 .tier{border-style:dashed}.card .why{background:#fff8e1;border-radius:6px;padding:8px 10px}
+@media(max-width:900px){.cards{grid-template-columns:1fr}}</style></head><body><div id="out">Loading…</div>
+<script id="src" type="text/markdown">
+# STICK-1 Phase 4: Hardening and packaging — C4 Architecture
+
+This page shows what Phase 4 adds so the system survives a normal day on a clean Mac: the backend starts by itself, the app waits for it, and the app can be signed and shipped. Chosen option: a per-user macOS LaunchAgent (a background job managed by macOS) for the backend, and a small retry loop in the app.
+
+## The idea in 30 seconds
+
+**Problem.** Today the backend runs only when a developer starts it by hand (`README.md:23-25`), and the app checks it once at launch. If the backend is not up yet, the app shows an error and stops trying (`mac/stick/app.py:100-102`, `mac/stick/app.py:171`). The backend writes no log of its own (a search of `backend/app` for `logging` finds nothing), and the app bundle is built but not signed (`mac/packaging/setup.py:1-18` has no signing step).
+
+**Principle.** Nothing should need a human to start it, and nothing should fail silently. Background jobs are started and restarted by macOS, and the app always says what state the backend is in.
+
+**Result.** After login the backend is already running. If the app starts first or the backend restarts, the app shows "backend offline" and reconnects by itself. A signed and notarized app can be installed on a clean Mac by following the README.
+
+## Legend
+
+| Style | Meaning |
+|---|---|
+| Green fill | New element |
+| Yellow fill | Changed element |
+| Grey fill | External system |
+| Solid thick border | Tier 1: required (all of Phase 4 is Tier 1; rough size: about one week for one developer, plus waiting time for Apple's notarization) |
+| Dashed border | Tier 2: improvement that can follow in a separate PR (none in Phase 4) |
+
+## Level 1: System Context
+
+```mermaid
+flowchart TB
+  user(["👤 User<br/>logs in, speaks a note"])
+  subgraph boundary["System boundary"]
+    sys["Stick and Categorize<br/>voice note → desktop sticky"]
+  end
+  macos["macOS<br/>launchd, microphone, desktop, Gatekeeper"]
+  apple["Apple notary service<br/>checks the app before release"]
+  user -->|"hotkey + voice"| sys
+  sys -->|"shows stickies"| user
+  sys -->|"starts at login"| macos
+  sys -.->|"submit app for notarization"| apple
+  class user person
+  class sys chT1
+  class macos,apple external
+  classDef person fill:#08427b,stroke:#052e56,color:#fff
+  classDef external fill:#999,stroke:#666,color:#fff
+  classDef newT1 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:3px
+  classDef newT2 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:2px,stroke-dasharray:6 4
+  classDef chT1 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:3px
+  classDef chT2 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:2px,stroke-dasharray:6 4
+```
+
+The system itself does not change shape. Two new outside parties appear: macOS now starts part of it at login, and Apple's notary service checks the app at release time. Notarization is Apple's malware check that lets the app open without warnings.
+
+## Level 2: Containers
+
+```mermaid
+flowchart LR
+  user(["👤 User"])
+  subgraph macapp["Mac client (Python)"]
+    app["Sticky Desktop App<br/>PyObjC, menu-bar app"]
+  end
+  subgraph be["Backend (Python)"]
+    agent["Backend LaunchAgent<br/>starts and restarts the backend"]
+    api["Backend API<br/>FastAPI"]
+    log["Backend Logging<br/>one log line per request"]
+  end
+  subgraph store["Storage"]
+    pg[("PostgreSQL<br/>notes, categories")]
+  end
+  subgraph rel["Release"]
+    ship["Release Script<br/>sign, notarize, staple"]
+  end
+  launchd["macOS launchd"]
+  apple["Apple notary service"]
+  user -->|"hotkey + voice"| app
+  app -->|"HTTP, retries"| api
+  api -->|"SQL"| pg
+  api --> log
+  launchd -->|"runs at login"| agent
+  agent -->|"launches"| api
+  ship -->|"builds, signs"| app
+  ship -.->|"notarize"| apple
+  class user person
+  class app,api chT1
+  class agent,log,ship newT1
+  class launchd,apple external
+  classDef person fill:#08427b,stroke:#052e56,color:#fff
+  classDef external fill:#999,stroke:#666,color:#fff
+  classDef newT1 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:3px
+  classDef newT2 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:2px,stroke-dasharray:6 4
+  classDef chT1 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:3px
+  classDef chT2 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:2px,stroke-dasharray:6 4
+```
+
+No new application. The app and the API change a little, and three small pieces are added around them. PostgreSQL is unchanged, but it must be running too: the plan does not say who starts it.
+
+## Level 3: Components
+
+Level 3 shows the Sticky Desktop App, where the "backend offline" behaviour lives.
+
+```mermaid
+flowchart TB
+  subgraph app["Sticky Desktop App (Python, PyObjC)"]
+    shell["Menu-Bar Shell<br/>shows status"]
+    mon["Connection Monitor<br/>checks /health, retries"]
+    sync["Launch Sync<br/>load all notes"]
+    client["API Client<br/>HTTP"]
+    win["Sticky Window<br/>draws stickies"]
+  end
+  api["Backend API"]
+  shell -->|"starts"| mon
+  mon -->|"state: online / offline"| shell
+  mon -->|"back online"| sync
+  mon -->|"GET /health"| client
+  sync -->|"GET /notes"| client
+  sync --> win
+  client -->|"HTTP"| api
+  class shell,sync,client chT1
+  class mon newT1
+  classDef unchanged fill:#fff,stroke:#333,color:#000
+  class win,api unchanged
+  classDef person fill:#08427b,stroke:#052e56,color:#fff
+  classDef external fill:#999,stroke:#666,color:#fff
+  classDef newT1 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:3px
+  classDef newT2 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:2px,stroke-dasharray:6 4
+  classDef chT1 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:3px
+  classDef chT2 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:2px,stroke-dasharray:6 4
+```
+
+- Recording, upload and stickies work as before. A voice note still keeps its id across retries.
+- Launch Sync no longer runs only once: it runs again whenever the backend comes back.
+- The menu status shows "backend offline" or "Ready" from the monitor, instead of an error that stays on screen.
+
+## New elements (green boxes)
+
+Every green box on Levels 2 and 3 has one card below. The README and manual test checklist from the plan are documents, not boxes, so they have no card.
+
+<div class="cards">
+<div class="card t1">
+<div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
+<h3>Backend LaunchAgent</h3>
+<p class="what"><b>What it is.</b> A small config file (a <code>.plist</code>) that tells macOS to start the backend when the user logs in and to start it again if it stops.</p>
+<p class="why"><b>Why we add it.</b> The backend has to be started by hand today: the README shows a manual <code>uvicorn</code> command (<code>README.md:23-25</code>), and no <code>.plist</code> or start script exists in the repo (a search finds none). After a restart the app would open with no backend.</p>
+<p><b>How it works.</b></p>
+<ul>
+<li>Runs the backend's own Python with <code>uvicorn app.main:app</code>.</li>
+<li>Starts at login and restarts after a crash.</li>
+<li>Sets <code>DATABASE_URL</code> and writes output to a log file.</li>
+</ul>
+<p class="where"><b>Where.</b> <code>deploy/dev.stick.backend.plist</code> and an install step in the README (planned paths). Installed in <code>~/Library/LaunchAgents/</code>.</p>
+</div>
+<div class="card t1">
+<div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
+<h3>Backend Logging</h3>
+<p class="what"><b>What it is.</b> Log lines from the backend: startup, model load, each request and each error.</p>
+<p class="why"><b>Why we add it.</b> The backend has no logging setup (a search of <code>backend/app</code> for <code>logging</code> finds nothing). Once it runs in the background there is no terminal, so a failed upload leaves no trace.</p>
+<p><b>How it works.</b></p>
+<ul>
+<li>Writes to standard output, which the LaunchAgent sends to a log file.</li>
+<li>Logs the note id, the result and the time taken for voice uploads. It does not log the note text.</li>
+<li>Log level is set by an environment variable.</li>
+</ul>
+<p class="where"><b>Where.</b> <code>backend/app/logging.py</code> (planned path), set up in <code>backend/app/main.py</code>.</p>
+</div>
+<div class="card t1">
+<div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
+<h3>Release Script</h3>
+<p class="what"><b>What it is.</b> A script that builds the app, signs it with a developer certificate, sends it to Apple for notarization and attaches the result (stapling).</p>
+<p class="why"><b>Why we add it.</b> The build makes <code>Stick.app</code> but nothing signs it (<code>mac/packaging/setup.py:1-18</code>). macOS ties the microphone permission to a properly signed app, and an unsigned app is blocked or warned about on other Macs.</p>
+<p><b>How it works.</b></p>
+<ul>
+<li>Runs the py2app build, then signs the bundle with the hardened runtime.</li>
+<li>Submits to Apple's notary service and waits for the answer.</li>
+<li>Staples the ticket so the app opens offline. Certificate and credentials come from the developer's keychain, never from the repo.</li>
+</ul>
+<p class="where"><b>Where.</b> <code>mac/packaging/release.sh</code> (planned path). Needs an Apple Developer account: not verified that one exists.</p>
+</div>
+<div class="card t1">
+<div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
+<h3>Connection Monitor</h3>
+<p class="what"><b>What it is.</b> A small loop in the app that checks whether the backend answers and tells the rest of the app.</p>
+<p class="why"><b>Why we add it.</b> The app asks the backend once at launch and, on failure, shows the error and stops (<code>mac/stick/app.py:100-102</code>, <code>mac/stick/app.py:171</code>). Retries exist only inside one upload (<code>mac/stick/api.py:12</code>, <code>api.py:78-83</code>). If the app starts before the backend, no stickies appear until the user relaunches.</p>
+<p><b>How it works.</b></p>
+<ul>
+<li>Calls <code>GET /health</code> every few seconds while offline, and less often while online. The intervals are not set in the plan.</li>
+<li>Offline: the menu shows "backend offline". Online again: it triggers Launch Sync.</li>
+<li>Runs in a background thread and never blocks the hotkey.</li>
+</ul>
+<p class="where"><b>Where.</b> <code>mac/stick/connection.py</code> (planned path), started from <code>mac/stick/app.py</code>.</p>
+</div>
+</div>
+
+Full architecture document: [STICK-1: Voice stickies on the Mac desktop — C4 Architecture](STICK-1-c4.html).
+
+</script>
+<script type="module">
+import { marked } from "https://cdn.jsdelivr.net/npm/marked@12/lib/marked.esm.js";
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+const r=new marked.Renderer();const base=r.code.bind(r);
+r.code=(code,lang)=>{const t=typeof code==="object"?code.text:code;const l=typeof code==="object"?code.lang:lang;
+ if(l==="mermaid"){const p=document.createElement("pre");p.className="mermaid";p.textContent=t;return p.outerHTML;}return base(code,lang);};
+document.getElementById("out").innerHTML=marked.parse(document.getElementById("src").textContent,{renderer:r});
+mermaid.initialize({startOnLoad:false,theme:"default",securityLevel:"loose"});
+const els=[...document.querySelectorAll(".mermaid")];for(let i=0;i<els.length;i++){const el=els[i];const src=el.textContent;try{const {svg}=await mermaid.render("diag"+i,src);el.innerHTML=svg;el.setAttribute("data-processed","true");}catch(e){el.textContent="Syntax error: "+e.message;}}
+</script></body></html>
