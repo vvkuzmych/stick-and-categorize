@@ -135,7 +135,7 @@ Every green box on Level 3 has one card below. The evidence for "Why" is mostly 
 <li><code>GET /notes</code> and <code>GET /categories</code> return what is stored. An empty list is a valid answer.</li>
 <li>Holds no business rules. It only calls the services.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>backend/app/api/notes.py</code> (planned path), mounted in <code>main.py</code>.</p>
+<p class="where"><b>Where.</b> <code>backend/app/api/notes.py</code> (built), mounted in <code>main.py</code>.</p>
 </div>
 <div class="card t1">
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
@@ -148,7 +148,7 @@ Every green box on Level 3 has one card below. The evidence for "Why" is mostly 
 <li>If the id already exists, returns the existing note and does not insert again.</li>
 <li>Asks Category Service for a category only when a name was given.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>backend/app/domain/notes.py</code> (planned path).</p>
+<p class="where"><b>Where.</b> <code>backend/app/domain/notes.py</code> (built).</p>
 </div>
 <div class="card t1">
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
@@ -161,7 +161,7 @@ Every green box on Level 3 has one card below. The evidence for "Why" is mostly 
 <li>Calls "find or insert" in the Repository.</li>
 <li>Leans on the unique name in PostgreSQL, so two parallel requests cannot create two rows.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>backend/app/domain/categories.py</code> (planned path).</p>
+<p class="where"><b>Where.</b> <code>backend/app/domain/categories.py</code> (built).</p>
 </div>
 <div class="card t1">
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
@@ -174,7 +174,7 @@ Every green box on Level 3 has one card below. The evidence for "Why" is mostly 
 <li>Reads the connection string from <code>DATABASE_URL</code>.</li>
 <li>Adds the database libraries to the backend dependencies. Which libraries is not decided in the plan.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>backend/app/db/</code> (planned path).</p>
+<p class="where"><b>Where.</b> <code>backend/app/db/</code> (built).</p>
 </div>
 <div class="card t1">
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
@@ -187,7 +187,7 @@ Every green box on Level 3 has one card below. The evidence for "Why" is mostly 
 <li><code>notes</code>: id supplied by the client, text, nullable <code>category_id</code>, <code>created_at</code>.</li>
 <li>Run once with <code>alembic upgrade head</code>. Tests use the same migration.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>backend/migrations/</code> and <code>backend/alembic.ini</code> (planned paths).</p>
+<p class="where"><b>Where.</b> <code>backend/migrations/</code> and <code>backend/alembic.ini</code> (built).</p>
 </div>
 </div>
 

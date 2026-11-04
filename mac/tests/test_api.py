@@ -18,14 +18,14 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         Handler.seen.append((self.command, self.path, self.rfile.read(length)))
         status, body = Handler.reply
-        data = json.dumps(body).encode()
+        data = b"" if status == 204 else json.dumps(body).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
 
-    do_GET = do_POST = _answer
+    do_GET = do_POST = do_DELETE = _answer
 
     def log_message(self, *args):
         pass
@@ -88,3 +88,15 @@ def test_unreachable_backend_retries_with_the_same_id(tmp_path, monkeypatch):
 
 def test_note_ids_are_unique():
     assert new_note_id() != new_note_id()
+
+
+def test_delete_note_sends_delete_and_accepts_empty_reply(server):
+    Handler.reply = (204, None)
+    ApiClient(server).delete_note("n1")
+    assert Handler.seen == [("DELETE", "/notes/n1", b"")]
+
+
+def test_delete_note_reports_backend_error(server):
+    Handler.reply = (500, {"detail": "boom"})
+    with pytest.raises(ApiError):
+        ApiClient(server).delete_note("n1")

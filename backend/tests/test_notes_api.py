@@ -74,3 +74,19 @@ def test_parallel_posts_of_same_note_id_make_one_note(client):
         results = list(pool.map(post, range(8)))
     assert all(r.status_code in (200, 201) for r in results)
     assert len(client.get("/notes").json()) == 1
+
+
+def test_delete_note_removes_it_and_is_repeatable(client):
+    note_id = new_id()
+    client.post("/notes", json={"id": note_id, "text": "Buy milk"})
+    assert client.delete(f"/notes/{note_id}").status_code == 204
+    assert client.get("/notes").json() == []
+    assert client.delete(f"/notes/{note_id}").status_code == 204
+
+
+def test_delete_keeps_other_notes(client):
+    keep, drop = new_id(), new_id()
+    client.post("/notes", json={"id": keep, "text": "keep"})
+    client.post("/notes", json={"id": drop, "text": "drop"})
+    client.delete(f"/notes/{drop}")
+    assert [n["id"] for n in client.get("/notes").json()] == [keep]

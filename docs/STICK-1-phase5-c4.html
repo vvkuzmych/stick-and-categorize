@@ -9,15 +9,15 @@ th{background:#f4f6f8}code{background:#f4f6f8;padding:1px 4px;border-radius:3px}
 <script id="src" type="text/markdown">
 # STICK-1 Phase 5: LLM Classifier — C4 Architecture
 
-This page shows what Phase 5 adds so a spoken request like "put this with my work stuff" gets a category. Chosen option: a small adapter that asks a local Ollama model, called only when the user asked for a category but the Intent Parser found no name.
+This page shows what Phase 5 adds so a spoken request like "put this with my work stuff" gets a category. Chosen option: a small adapter that asks Google's Gemini API, called only when the user asked for a category but the Intent Parser found no name. The plan named a local Ollama model; it was dropped because of its memory cost (about 2.6 GB loaded).
 
 ## The idea in 30 seconds
 
-**Problem.** Today a category is set only when the user says "in category X" or "categorize as X" (`backend/app/domain/intent.py:7-10`). Any other phrasing gives no category, and the parser returns the same `None` whether the user asked for nothing or asked in other words (`intent.py:18-19`, `intent.py:33-34`). No code in the backend talks to a language model (a search of `backend`, `mac` and `deploy` for "ollama" finds nothing).
+**Problem.** Today a category is set only when the user says "in category X" or "categorize as X" (`backend/app/domain/intent.py:7-10`). Any other phrasing gives no category, and the parser returns the same `None` whether the user asked for nothing or asked in other words (`intent.py:25`, `intent.py:34`, `intent.py:40`). Before Phase 5 no backend code talked to a language model.
 
-**Principle.** The parser stays the fast, free first choice. The model is a fallback behind an interface, runs only on this machine, and may fail at any time without affecting the note.
+**Principle.** The parser stays the fast, free first choice. The model is a fallback behind an interface, it may only pick an existing category, and it may fail at any time without affecting the note.
 
-**Result.** "Put this with my work stuff" is filed under the existing Work category. If Ollama is off, slow or confused, the sticky is still created, just without a category.
+**Result.** "Put this with my work stuff" is filed under the existing Work category. With no API key, no internet, a timeout or a bad answer, the sticky is still created, just without a category. The cost is that the note text and category names go to Google when this fallback runs.
 
 ## Legend
 
@@ -26,7 +26,7 @@ This page shows what Phase 5 adds so a spoken request like "put this with my wor
 | Green fill | New element |
 | Yellow fill | Changed element |
 | Grey fill | External system |
-| Solid thick border | Tier 1: required for Phase 5's "done when" (rough size: about 3 to 4 days for one developer, including trying 2 or 3 models) |
+| Solid thick border | Tier 1: required for Phase 5's "done when" (rough size: about 2 to 3 days for one developer) |
 | Dashed border | Tier 2: improvement that can follow in a separate PR (none here; Phase 5 as a whole is the plan's Tier 2) |
 
 ## Level 1: System Context
@@ -37,22 +37,23 @@ flowchart TB
   subgraph boundary["System boundary"]
     sys["Stick and Categorize<br/>voice note → desktop sticky"]
   end
-  ollama["Ollama<br/>local language model server"]
+  gemini["Google Gemini API<br/>hosted language model"]
   user -->|"hotkey + voice"| sys
   sys -->|"shows stickies"| user
-  sys -.->|"which category? (localhost only)"| ollama
+  sys -.->|"which category? (internet)"| gemini
   class user person
   class sys chT1
-  class ollama external
+  class gemini external
   classDef person fill:#08427b,stroke:#052e56,color:#fff
   classDef external fill:#999,stroke:#666,color:#fff
   classDef newT1 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:3px
   classDef newT2 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:2px,stroke-dasharray:6 4
   classDef chT1 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:3px
   classDef chT2 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:2px,stroke-dasharray:6 4
+  classDef unchanged fill:#fff,stroke:#333,color:#000
 ```
 
-One new outside party: Ollama, a program that runs language models on the user's own Mac. Nothing leaves the machine, and the link is dashed because the system works without it.
+One new outside party: Google's Gemini API, reached over the internet with an API key (a secret token from Google AI Studio). The link is dashed because the system works without it. Only note text and category names are sent, and only when a category was asked for in words.
 
 ## Level 2: Containers
 
@@ -68,25 +69,25 @@ flowchart LR
   subgraph store["Storage"]
     pg[("PostgreSQL<br/>notes, categories")]
   end
-  ollama["Ollama<br/>llama3.2:3b or similar"]
+  gemini["Google Gemini API"]
   user -->|"hotkey + voice"| app
   app -->|"HTTP, unchanged"| api
   api -->|"SQL"| pg
-  api -.->|"HTTP, short timeout"| ollama
+  api -.->|"HTTPS, short timeout"| gemini
   class user person
   class app,pg unchanged
   class api chT1
-  class ollama external
-  classDef unchanged fill:#fff,stroke:#333,color:#000
+  class gemini external
   classDef person fill:#08427b,stroke:#052e56,color:#fff
   classDef external fill:#999,stroke:#666,color:#fff
   classDef newT1 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:3px
   classDef newT2 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:2px,stroke-dasharray:6 4
   classDef chT1 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:3px
   classDef chT2 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:2px,stroke-dasharray:6 4
+  classDef unchanged fill:#fff,stroke:#333,color:#000
 ```
 
-No new application and no change in the Mac app or the database. Only the Backend API gains a way to call Ollama. The model adds about 2.6 GB of memory when loaded (Spike C in the plan).
+No new application and no change in the Mac app or the database. Only the Backend API gains a way to call Gemini. No local model is installed, so there is no extra memory use on the Mac.
 
 ## Level 3: Components
 
@@ -100,12 +101,12 @@ flowchart TB
     parser["Intent Parser<br/>finds 'in category X'"]
     detect["Category Request Detector<br/>did the user ask for a category?"]
     iface["Category Classifier<br/>interface"]
-    adapter["Ollama Classifier<br/>asks the local model"]
+    adapter["Gemini Classifier<br/>asks the Gemini API"]
     cats["Category Service<br/>list, find or create"]
     notes["Note Service<br/>save with category"]
     health["Health Check<br/>GET /health"]
   end
-  ollama["Ollama"]
+  gemini["Google Gemini API"]
   pg[("PostgreSQL")]
   router --> voice
   voice --> parser
@@ -114,27 +115,26 @@ flowchart TB
   voice -->|"existing names"| cats
   voice --> notes
   iface -.-> adapter
-  adapter -.->|"JSON schema reply"| ollama
-  health -.->|"reachable?"| ollama
+  adapter -.->|"JSON schema reply"| gemini
+  health -.->|"provider + status, no call"| adapter
   cats --> pg
   notes --> pg
   class router,voice,health chT1
   class detect,iface,adapter newT1
-  class parser,cats,notes unchanged
-  classDef unchanged fill:#fff,stroke:#333,color:#000
+  class parser,cats,notes,pg unchanged
+  class gemini external
   classDef person fill:#08427b,stroke:#052e56,color:#fff
   classDef external fill:#999,stroke:#666,color:#fff
   classDef newT1 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:3px
   classDef newT2 fill:#2e7d32,stroke:#1b5e20,color:#fff,stroke-width:2px,stroke-dasharray:6 4
   classDef chT1 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:3px
   classDef chT2 fill:#f9a825,stroke:#e65100,color:#000,stroke-width:2px,stroke-dasharray:6 4
-  class ollama external
-  class pg unchanged
+  classDef unchanged fill:#fff,stroke:#333,color:#000
 ```
 
-- Notes with "in category X", notes with no category request, and repeated uploads of the same note id work as before. A retry still returns the stored note before any model call.
+- Notes with "in category X", notes with no category request, and repeated uploads of the same note id work as before. A retry still returns the stored note before any Gemini call.
 - Voice Note Service gets one more step between parsing and saving. Notes Router only passes the classifier in.
-- Health Check adds an Ollama line to its answer. It still returns 200 when only Ollama is down, so the app does not show "backend offline" for it.
+- Health Check adds the classifier provider and status. It makes no network call (to save free-tier quota) and never turns a classifier problem into a 503.
 
 ## New elements (green boxes)
 
@@ -145,41 +145,41 @@ Every green box on Level 3 has one card below. There are no green boxes on Level
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
 <h3>Category Request Detector</h3>
 <p class="what"><b>What it is.</b> A pure function (text in, yes or no out) that says whether the user asked for a category in words, such as "put this with my work stuff" or "file this under shopping".</p>
-<p class="why"><b>Why we add it.</b> The Intent Parser returns <code>(text, None)</code> both when nothing was asked and when a request had no usable name (<code>backend/app/domain/intent.py:18-19</code>, <code>intent.py:27-28</code>, <code>intent.py:33-34</code>), and its trigger knows only two phrases (<code>intent.py:7-10</code>). The plan says the model must run only when a category was asked for, so the pipeline needs that fact on its own.</p>
+<p class="why"><b>Why we add it.</b> The Intent Parser returns <code>(text, None)</code> both when nothing was asked and when a request had no usable name (<code>backend/app/domain/intent.py:25</code>, <code>intent.py:34</code>, <code>intent.py:40</code>), and its trigger knows only two phrases (<code>intent.py:7-10</code>). The plan says the model must run only when a category was asked for, so the pipeline needs that fact on its own.</p>
 <p><b>How it works.</b></p>
 <ul>
 <li>Runs after the Intent Parser, and only when the parser found no name.</li>
-<li>Matches a short list of request phrases. The plan does not define the list, so it must be chosen and tested with table tests, as for the parser.</li>
-<li>No match means no model call, so ordinary notes cost nothing extra.</li>
+<li>Matches "categorize", "category", verbs like put, file or stick followed by this, it or that, and "this goes with". The list is mine, not the plan's, and is covered by table tests with false-positive cases such as "Add milk to the shopping list".</li>
+<li>No match means no Gemini call, so ordinary notes cost nothing and send nothing.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>backend/app/domain/intent.py</code> next to <code>parse_intent</code>, with table tests in <code>backend/tests/test_intent.py</code>. Keep <code>parse_intent</code> unchanged.</p>
+<p class="where"><b>Where.</b> <code>backend/app/domain/intent.py</code> (<code>asks_for_category</code>), tests in <code>backend/tests/test_intent.py</code>. <code>parse_intent</code> is unchanged.</p>
 </div>
 <div class="card t1">
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
 <h3>Category Classifier</h3>
-<p class="what"><b>What it is.</b> An interface (a Python <code>Protocol</code>): note text and existing category names in, one existing name or nothing out.</p>
-<p class="why"><b>Why we add it.</b> The pipeline today has one swappable engine behind an interface, the Transcriber (<code>backend/app/speech/transcriber.py:5-8</code>), and the plan wants the same for classification so tests use a fake and the provider can change. There is no such seam for categories now (<code>backend/app/domain/voice.py:14-29</code> only knows the Transcriber).</p>
+<p class="what"><b>What it is.</b> An interface (a Python <code>Protocol</code>): note text and existing category names in, one of those names (or nothing) out. It also reports a provider name and a cheap status for <code>/health</code>.</p>
+<p class="why"><b>Why we add it.</b> The pipeline has one swappable engine behind an interface, the Transcriber (<code>backend/app/speech/transcriber.py:5-8</code>), and the plan wants the same for classification so tests use a fake and the provider can change again. Before Phase 5 <code>VoiceNoteService</code> knew only the Transcriber (<code>backend/app/domain/voice.py:14-29</code> in the Phase 2 version).</p>
 <p><b>How it works.</b></p>
 <ul>
-<li>One method, for example <code>classify(text, categories) -&gt; str | None</code>.</li>
-<li>Returns only a name from the given list. Any other answer becomes <code>None</code>.</li>
-<li>Never raises to the caller: failure means <code>None</code>.</li>
+<li>One method, <code>classify(text, categories) -&gt; str | None</code>. It must never raise.</li>
+<li>Helpers in the same file match an answer to an existing name (ignoring case and spaces) and send JSON over HTTP.</li>
+<li>Voice Note Service also guards the call, so a faulty classifier cannot lose a note.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>backend/app/classify/classifier.py</code> (new package, like <code>app/speech</code>). Tests use a fake class.</p>
+<p class="where"><b>Where.</b> <code>backend/app/classify/classifier.py</code> (new package, like <code>app/speech</code>). Tests use a fake class in <code>backend/tests/test_voice_api.py</code>.</p>
 </div>
 <div class="card t1">
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
-<h3>Ollama Classifier</h3>
-<p class="what"><b>What it is.</b> The only implementation of the Category Classifier. It sends one request to Ollama on localhost and reads the answer.</p>
-<p class="why"><b>Why we add it.</b> Nothing in the repo calls Ollama or any model (no match for "ollama" in <code>backend</code>, <code>mac</code>, <code>deploy</code>). Spike C measured that <code>llama3.2:3b</code> picked a sensible category for 3 of 3 sample notes, at 0.3 to 0.5 s warm and 4.6 s on the first call (<code>.scratch/stick-1/implementation-plan.md:16</code>).</p>
+<h3>Gemini Classifier</h3>
+<p class="what"><b>What it is.</b> The only implementation of the Category Classifier. It sends one HTTPS request to the Gemini API and reads the answer.</p>
+<p class="why"><b>Why we add it.</b> No backend code called a language model before (<code>backend/app/main.py</code> loaded only Whisper). The local option from the plan, a 3B Ollama model, needs about 2.6 GB of memory (<code>.scratch/stick-1/implementation-plan.md:16</code>), and a 1B model was tested and answered "Home" for nearly everything. A hosted model costs no local memory.</p>
 <p><b>How it works.</b></p>
 <ul>
-<li>Sends the note text and the category names, and asks for a reply shaped as <code>{"category": "..."}</code>. Using the existing names as the allowed values in the schema is the plan to keep answers valid; Ollama's support for this is not verified in this repo.</li>
-<li>Times out after a few seconds. Connection error, timeout, bad JSON or a name not in the list all return <code>None</code>.</li>
-<li>Skips the call when no categories exist yet. Matching ignores case and spaces, like <code>normalize</code> (<code>backend/app/domain/categories.py:5-6</code>).</li>
-<li>Model name, URL and timeout come from environment variables. The first call after Ollama idles can exceed a short timeout (4.6 s cold load).</li>
+<li>Sends the note text and category names, and forces a JSON reply whose <code>category</code> can only be an existing name or "none", so it cannot invent a category. The API key goes in a header, not in the URL.</li>
+<li>Times out after a few seconds (<code>GEMINI_TIMEOUT</code>, default 5). Connection error, HTTP error, bad JSON or an unknown name all return nothing, and the note is saved without a category.</li>
+<li>Skips the call when no categories exist. Without <code>GEMINI_API_KEY</code> the backend starts with no classifier.</li>
+<li>Verified live: Google retired the older <code>generateContent</code> call (it returns 404 for every model), so the adapter uses the newer Interactions API (<code>/v1beta/interactions</code>, default model <code>gemini-3.5-flash-lite</code>). A call takes about 2 to 3 seconds. Free-tier limits and data use were not checked.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>backend/app/classify/ollama.py</code>, built once in <code>backend/app/main.py</code> next to the transcriber (<code>main.py:19-29</code>). Install and <code>ollama pull</code> steps go in <code>README.md</code>.</p>
+<p class="where"><b>Where.</b> <code>backend/app/classify/gemini.py</code>, built once in <code>backend/app/main.py</code> next to the transcriber. Setup and the privacy note are in <code>README.md</code> (Phase 5).</p>
 </div>
 </div>
 

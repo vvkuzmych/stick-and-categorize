@@ -162,7 +162,7 @@ Every green box on Levels 2 and 3 has one card below. The Sticky Desktop App car
 <li>Menu: settings, quit. The backend URL is saved between runs.</li>
 <li>Starts the hotkey and the launch sync.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>mac/stick/app.py</code> (planned path).</p>
+<p class="where"><b>Where.</b> <code>mac/stick/app.py</code> (built).</p>
 </div>
 <div class="card t1">
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
@@ -175,7 +175,7 @@ Every green box on Levels 2 and 3 has one card below. The Sticky Desktop App car
 <li>First press starts recording, second press stops it.</li>
 <li>Needs the macOS Input Monitoring permission. Not verified in Phase 0.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>mac/stick/hotkey.py</code> (planned path).</p>
+<p class="where"><b>Where.</b> <code>mac/stick/hotkey.py</code> (built).</p>
 </div>
 <div class="card t1">
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
@@ -188,7 +188,7 @@ Every green box on Levels 2 and 3 has one card below. The Sticky Desktop App car
 <li>Start installs the audio tap and stop writes the file (<code>record_spike.py:41-47</code>).</li>
 <li>Hands the finished file to the API Client.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>mac/stick/recorder.py</code> (planned path).</p>
+<p class="where"><b>Where.</b> <code>mac/stick/recorder.py</code> (built).</p>
 </div>
 <div class="card t1">
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
@@ -201,7 +201,7 @@ Every green box on Levels 2 and 3 has one card below. The Sticky Desktop App car
 <li><code>POST /notes/voice</code> with the audio and id. 201 and 200 both mean "note saved".</li>
 <li><code>GET /notes</code> for the launch sync. The backend URL comes from the settings.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>mac/stick/api.py</code> (planned path). The HTTP library is not chosen in the plan.</p>
+<p class="where"><b>Where.</b> <code>mac/stick/api.py</code> (built). Built with the standard library <code>urllib</code>.</p>
 </div>
 <div class="card t1">
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
@@ -214,7 +214,7 @@ Every green box on Levels 2 and 3 has one card below. The Sticky Desktop App car
 <li>Passes the notes to Sticky Placement, then to Sticky Window.</li>
 <li>Runs once at launch, so there is nothing to keep in sync while running.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>mac/stick/sync.py</code> (planned path).</p>
+<p class="where"><b>Where.</b> <code>mac/stick/sync.py</code> (built).</p>
 </div>
 <div class="card t1">
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
@@ -227,7 +227,7 @@ Every green box on Levels 2 and 3 has one card below. The Sticky Desktop App car
 <li>Returns the next free spot.</li>
 <li>Pure code with no AppKit calls, so it can be tested without a screen.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>mac/stick/placement.py</code> (planned path).</p>
+<p class="where"><b>Where.</b> <code>mac/stick/placement.py</code> (built).</p>
 </div>
 <div class="card t1">
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
@@ -240,7 +240,7 @@ Every green box on Levels 2 and 3 has one card below. The Sticky Desktop App car
 <li>Shows the text and, if there is one, the category.</li>
 <li>Plain text only. No editing, colours or styling.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>mac/stick/sticky.py</code> (planned path), grown from <code>mac/spikes/panel_spike.py</code>.</p>
+<p class="where"><b>Where.</b> <code>mac/stick/sticky.py</code> (built), grown from <code>mac/spikes/panel_spike.py</code>.</p>
 </div>
 </div>
 

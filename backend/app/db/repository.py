@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -18,6 +18,10 @@ class Repository:
 
     def list_notes(self) -> list[Note]:
         return list(self.session.scalars(select(Note).order_by(Note.created_at, Note.id)))
+
+    def delete_note(self, note_id: uuid.UUID) -> bool:
+        """Returns True if a row was deleted."""
+        return self.session.execute(delete(Note).where(Note.id == note_id)).rowcount > 0
 
     def save_note(self, note_id: uuid.UUID, text: str, category_id: int | None) -> bool:
         """Insert unless the id exists. Returns True if a row was inserted."""
