@@ -1,6 +1,6 @@
 import pytest
 
-from app.domain.intent import parse_intent
+from app.domain.intent import asks_for_category, parse_intent
 
 
 @pytest.mark.parametrize(
@@ -39,3 +39,32 @@ def test_category_phrases(text, clean, category):
 )
 def test_no_category(text):
     assert parse_intent(text) == (text.strip(), None)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Put this with my work stuff",
+        "file it under shopping",
+        "Categorize this one for me",
+        "Buy milk, and give it a category",
+        "This goes with the home things",
+        "stick that in with work",
+    ],
+)
+def test_asks_for_category(text):
+    assert asks_for_category(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Buy milk",
+        "Add milk to the shopping list",
+        "Put the keys on the table",
+        "Call the dentist at five",
+        "",
+    ],
+)
+def test_does_not_ask_for_category(text):
+    assert not asks_for_category(text)

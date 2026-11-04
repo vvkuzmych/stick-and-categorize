@@ -123,3 +123,64 @@ def test_real_whisper_end_to_end(client):
     assert r.status_code == 201, r.text
     assert r.json()["category"].lower() == "work"
     assert "milk" in r.json()["text"].lower()
+
+
+class FakeClassifier:
+    def __init__(self, answer=None, error=None):
+        self.answer, self.error, self.calls = answer, error, []
+
+    def classify(self, text, categories):
+        self.calls.append((text, categories))
+        if self.error:
+            raise self.error
+        return self.answer
+
+
+@pytest.fixture
+def classifier(client, fake):
+    c = FakeClassifier("Work")
+    app.state.classifier = c
+    client.post("/notes", json={"id": str(uuid.uuid4()), "text": "seed", "category": "Work"})
+    yield c
+    del app.state.classifier
+
+
+def test_vague_category_request_uses_classifier(client, fake, classifier):
+    fake.text = "Send the report, put this with my work stuff"
+    r = post_voice(client)
+    assert r.json()["category"] == "Work"
+    assert classifier.calls == [(fake.text, ["Work"])]
+
+
+def test_classifier_not_called_without_a_category_request(client, fake, classifier):
+    fake.text = "Buy milk"
+    assert post_voice(client).json()["category"] is None
+    assert classifier.calls == []
+
+
+def test_classifier_not_called_when_parser_found_a_name(client, fake, classifier):
+    r = post_voice(client)  # "Buy milk in category Work."
+    assert r.json()["category"] == "Work"
+    assert classifier.calls == []
+
+
+def test_classifier_not_called_when_no_categories_exist(client, fake):
+    c = FakeClassifier("Work")
+    app.state.classifier = c
+    fake.text = "Put this with my work stuff"
+    try:
+        r = post_voice(client)
+    finally:
+        del app.state.classifier
+    assert r.status_code == 201 and r.json()["category"] is None
+    assert c.calls == []
+
+
+@pytest.mark.parametrize("c", [FakeClassifier(None), FakeClassifier(error=RuntimeError("boom"))])
+def test_classifier_failure_still_saves_note(client, fake, classifier, c):
+    app.state.classifier = c
+    fake.text = "Put this with my work stuff"
+    r = post_voice(client)
+    assert r.status_code == 201
+    assert r.json()["category"] is None
+    assert len(client.get("/notes").json()) == 2
