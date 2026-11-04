@@ -47,3 +47,19 @@ def test_full_screen_cascades_instead_of_failing():
     taken = [Rect(0, 0, 1000, 700)]
     x, y = next_position(AREA, SIZE, taken)
     assert (x, y) == (GAP + 30, 700 - GAP - 140 - 30)
+
+
+def test_reachable_spot_on_a_screen():
+    from stick.placement import Rect, is_reachable
+
+    screens = [Rect(0, 0, 1000, 800)]
+    assert is_reachable(Rect(100, 100, 220, 140), screens)
+    assert is_reachable(Rect(900, 700, 220, 140), screens)  # partly off the edge, still grabbable
+
+
+def test_spot_on_a_missing_screen_is_not_reachable():
+    from stick.placement import Rect, is_reachable
+
+    screens = [Rect(0, 0, 1000, 800)]
+    assert not is_reachable(Rect(2500, 100, 220, 140), screens)  # second monitor unplugged
+    assert not is_reachable(Rect(990, 790, 220, 140), screens)  # only a sliver visible

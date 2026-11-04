@@ -39,3 +39,13 @@ def next_position(area: Rect, size: tuple[float, float], taken: list[Rect]) -> t
     n = len(taken)
     offset = CASCADE_STEP * (n % 10)
     return area.x + GAP + offset, top - GAP - h - offset
+
+
+def is_reachable(rect: Rect, screens: list[Rect], min_visible: float = 40) -> bool:
+    """True if enough of `rect` is on some screen to grab it. A saved spot may be on a screen that is gone."""
+    for s in screens:
+        w = min(rect.x + rect.w, s.x + s.w) - max(rect.x, s.x)
+        h = min(rect.y + rect.h, s.y + s.h) - max(rect.y, s.y)
+        if w >= min_visible and h >= min_visible:
+            return True
+    return False

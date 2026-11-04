@@ -9,19 +9,20 @@ th{background:#f4f6f8}code{background:#f4f6f8;padding:1px 4px;border-radius:3px}
 <script id="src" type="text/markdown">
 # STICK-1: Voice stickies on the Mac desktop — Architecture
 
-Status: as built after Phases 0 to 5 (commit `470cb86`), plus the risks and open decisions that remain. Recommended option: keep the current two-part design (a Python menu-bar app and a local Python backend with PostgreSQL), and spend the next effort on verification and hardening, not on new structure.
+Status: as built after Phases 0 to 5 and the changes of 2026-11-04 (automatic categories, Ctrl+Option+R hotkey, delete and drag on stickies, local code signing), plus the risks and open decisions that remain. Recommended option: keep the current two-part design (a Python menu-bar app and a local Python backend with PostgreSQL), and spend the next effort on verification and hardening, not on new structure.
 
 ## 1. Summary
 
-**What we are doing.** A Mac menu-bar app records a voice note when the user presses Ctrl+Option+Space. A local backend turns the audio into text, finds an optional category, stores the note, and the app shows it as a sticky window on the desktop. All code is Python.
+**What we are doing.** A Mac menu-bar app records a voice note when the user presses Ctrl+Option+R. A local backend turns the audio into text, finds an optional category, stores the note, and the app shows it as a sticky window on the desktop. All code is Python.
 
-**Recommended option.** Option A: keep the app and the backend as two processes. The app only records, uploads and draws. The backend owns transcription, categories and storage. The category fallback uses Google Gemini and is opt-in.
+**Recommended option.** Option A: keep the app and the backend as two processes. The app only records, uploads and draws. The backend owns transcription, categories and storage. The category fallback uses Google Gemini and is opt-in: it runs only when the user asked for a category in other words, and only picks an existing category.
 
 **Key risks**
-- **Not tested end to end by a person.** The hotkey, the real microphone, Input Monitoring permission and Space switching were never verified on a real run (they need a human at the Mac).
-- **Signing and notarization were never run.** `mac/packaging/release.sh` exists but no Apple Developer certificate is known, so a clean-Mac install is unproven.
-- **Privacy.** With a Gemini key set, note text and category names leave the Mac. Recorded audio used to stay in temporary folders (fixed: it is now deleted after the upload attempt). On the free Gemini tier, Google's terms allow it to use submitted content to improve products and let human reviewers read it.
+- **Only partly tested by a person.** On 2026-11-04 the owner confirmed on a real Mac: hotkey, microphone, sticky creation, drag and delete. Still unverified: denied microphone, silence, Space switching, relaunch, start after a real login.
+- **Distribution signing never ran.** Local builds are signed with a self-signed certificate (`mac/packaging/build_dev.sh`), which keeps the microphone permission across rebuilds but is not trusted on other Macs. `release.sh` (Developer ID and notarization) exists but no certificate is known, so a clean-Mac install is unproven.
+- **Privacy.** With a Gemini key set, note text and category names leave the Mac when a category was asked for in words. Recorded audio used to stay in temporary folders (fixed: it is now deleted after the upload attempt). On the free Gemini tier, Google's terms allow it to use submitted content to improve products and let human reviewers read it.
 - **No access control.** The backend has no authentication (a search of `backend/app` for auth, cors and token finds nothing). It listens on `127.0.0.1` only when started by the LaunchAgent (`deploy/dev.stick.backend.plist:13-16`). Started by hand with the README command, it uses uvicorn's default host.
+- **Slow classifier.** Gemini answered in 2 to 3 s at first but took 13 to 24 s (and once returned 503) on 2026-11-04. A failed DNS lookup is not covered by the timeout and took about 30 s. Only notes that ask for a category in words wait for it.
 - **Lost audio.** If the backend is down when a note is spoken, the audio is not queued. After 3 tries the upload fails and the user must speak again (`mac/stick/api.py:87-95`).
 
 ## 2. Inputs
@@ -33,8 +34,8 @@ Status: as built after Phases 0 to 5 (commit `470cb86`), plus the risks and open
 **Scope.** This repository only. No adjacent repositories. This document changes no code.
 
 **Group split**
-- **In scope (built).** Recording, upload, transcription, intent parsing, categories, notes API, sticky windows, launch sync, reconnect, logging, health, LaunchAgent, release script, Gemini fallback.
-- **Out of scope (plan says "not planned yet").** Editing or deleting stickies, sticky position and colour, offline queue, multi-user or multi-device, cloud transcription.
+- **In scope (built).** Recording, upload, transcription, intent parsing, categories, notes API, sticky windows (drag, saved positions, delete), launch sync, reconnect, logging, health, LaunchAgent, local and release signing, Gemini category fallback.
+- **Out of scope (plan says "not planned yet").** Editing stickies, colour, offline queue, multi-user or multi-device, cloud transcription.
 - **Needs agreement.** See section 15.
 
 ## 3. Current state
@@ -49,12 +50,14 @@ Status: as built after Phases 0 to 5 (commit `470cb86`), plus the risks and open
 | Category matching ignores case and extra spaces; a unique index settles races. | `backend/app/domain/categories.py:5-18`, `backend/migrations/versions/0001_notes_and_categories.py:20` | "Work" and "work" are one category. Gemini cannot create a new one. |
 | `/health` is 200 only if the database answers. The classifier status never fails it. | `backend/app/main.py:44-54` | "Backend offline" in the app also covers a dead database. |
 | The app polls `/health` every 3 s offline and every 15 s online, and re-syncs on every return. | `mac/stick/connection.py:5-6`, `mac/stick/app.py:96-101` | Stickies reappear without relaunch. Each poll runs `select 1`. |
-| Stickies are drawn once per note id. Nothing removes or moves them. | `mac/stick/sticky.py:61-62`, `sticky.py:59` | Fine while notes are never deleted. Positions are recomputed on every launch, so they can change if the screen changes. |
+| Stickies are drawn once per note id. The ✕ button deletes a note (`DELETE /notes/{id}`, 204 even if already gone) and the sticky closes only after the backend answers. Stickies can be dragged, and the position is saved on this Mac (`NSUserDefaults`, `mac/stick/settings.py` `PositionStore`). | `mac/stick/sticky.py:30-110`, `mac/stick/app.py:150-162`, `backend/app/api/notes.py:122-128` | A failed delete leaves the sticky and shows the error in the menu. A saved spot that is no longer on any screen falls back to automatic placement. Positions are not synced between Macs. |
 | The app keeps no notes of its own. | `mac/stick/app.py:1`, `mac/stick/sync.py:4-6` | One source of truth (the database). No local queue for offline use. |
 | Recorded audio is written to a temporary folder and deleted after the upload attempt ends (fixed after this review). | `mac/stick/recorder.py` (`discard_recording`), `mac/stick/app.py` (`upload`) | Recordings no longer accumulate. Before the fix they stayed in the temp area. |
 | Audio is limited to 10 MB and 60 s; empty speech gives 422. | `backend/app/api/limits.py:6-31`, `backend/app/api/notes.py:92-97` | Clear errors. The app shows the message from the backend. |
-| A database connection is held during transcription and the Gemini call. | `backend/app/db/session.py:19-27`, `backend/app/domain/voice.py:32-41` | Fine for one user. Many parallel uploads would hold many connections (not measured). |
+| A database connection is held during transcription and the Gemini call (now up to 8 s per note). | `backend/app/db/session.py:19-27`, `backend/app/domain/voice.py:31-45` | Fine for one user. Many parallel uploads would hold many connections (not measured). |
 | Database runs in Docker on host port 5433 and restarts with Docker Desktop. | `docker-compose.yml:2-9`, `README.md:53` | Backend start also depends on Docker Desktop starting at login (not verified on a fresh login). |
+| Whisper is told to expect English (`WHISPER_LANGUAGE`, default `en`; empty means auto-detect). | `backend/app/main.py:26`, `backend/app/speech/faster_whisper.py:10-17` | Auto-detect guessed Russian (probability 0.68) on a short clip and produced nonsense. Other languages need the variable set, and the phrase parser knows only English. |
+| The global hotkey is Ctrl+Option+R, registered with Carbon `RegisterEventHotKey`. | `mac/stick/hotkey.py:1-58` | No Input Monitoring permission is needed, and the system takes the key press (an earlier `NSEvent` monitor needed the permission and never fired without it). |
 | The first run downloads the Whisper model from the internet. | `README.md:59` | An offline first start fails to load the model. |
 
 ## 4. C4 level 1: Context
@@ -122,7 +125,7 @@ Everything is new here, because this document covers the whole project (green = 
 ```mermaid
 flowchart TB
   subgraph api["Backend API (FastAPI)"]
-    router["Notes Router<br/>POST /notes, POST /notes/voice, GET /notes, GET /categories"]
+    router["Notes Router<br/>POST /notes, POST /notes/voice, GET /notes, DELETE /notes/id, GET /categories"]
     health["Health Check<br/>GET /health"]
     limits["Audio Limits<br/>size and length"]
     voice["Voice Note Service<br/>transcribe, parse, classify, save"]
@@ -171,7 +174,7 @@ sequenceDiagram
   participant B as Backend API
   participant W as Whisper
   participant D as PostgreSQL
-  U->>A: Ctrl+Option+Space, speak, press again
+  U->>A: Ctrl+Option+R, speak, press again
   A->>A: record WAV, make note id (uuid)
   A->>B: POST /notes/voice (id, audio)
   B->>B: check size and length
@@ -250,7 +253,7 @@ sequenceDiagram
     B->>D: save note without category
   else call Gemini
     B->>C: classify(text, names)
-    C->>G: HTTPS, forced JSON, timeout 5 s
+    C->>G: HTTPS, forced JSON, timeout 8 s
     alt error, timeout, bad JSON, or name not in list
       C-->>B: none
     else valid existing name
@@ -260,7 +263,29 @@ sequenceDiagram
   end
 ```
 
-The note is always saved. The classifier can only return a name from the list, so it cannot create categories.
+The note is always saved. The classifier can only return a name from the list, so it cannot create categories. The timeout does not cover a failed DNS lookup, which took about 30 s once.
+
+### 7.5 Failure: delete while the backend is down
+
+```mermaid
+sequenceDiagram
+  actor U as User
+  participant A as Stick.app
+  participant B as Backend API
+  participant D as PostgreSQL
+  U->>A: click the cross on a sticky
+  A->>B: DELETE /notes/id
+  alt backend unreachable or error
+    B--xA: no answer
+    A->>A: keep the sticky, show the message in the menu
+  else ok
+    B->>D: delete where id
+    B-->>A: 204 (also when the note was already gone)
+    A->>A: close the sticky
+  end
+```
+
+The sticky closes only after the backend confirms, so a deleted note cannot come back after a relaunch. Deleting twice is safe.
 
 ## 8. State diagram
 
@@ -303,7 +328,7 @@ erDiagram
 |---|---|---|
 | `note.id` | uuid | Generated by the app before upload (`mac/stick/api.py:46`). |
 | `note.text` | text | Whisper output with the category phrase removed (`backend/app/domain/intent.py`). |
-| `note.category` | text or null | Spoken phrase, else Gemini pick from existing names, else null (`backend/app/domain/voice.py:36-40`). |
+| `note.category` | text or null | Spoken phrase, else Gemini choice (existing or new name), else null (`backend/app/domain/voice.py:36-41`). |
 | `note.created_at` | timestamptz | Database default (`backend/app/db/models.py:26`). |
 | Backend URL | string | `NSUserDefaults`, default `http://127.0.0.1:8000` (`mac/stick/settings.py:3-8`). |
 
@@ -312,6 +337,7 @@ erDiagram
 | `POST /notes/voice` | form: `id` (uuid), `audio` (file) | 201 new note, 200 existing note, 413 too big, 422 unreadable, too long, or no speech |
 | `POST /notes` | json: `id`, `text`, optional `category` | 201 or 200 note |
 | `GET /notes` | none | notes, oldest first |
+| `DELETE /notes/{id}` | none | 204, also when the note does not exist |
 | `GET /categories` | none | list of names |
 | `GET /health` | none | 200 `{status, classifier{provider, status}}` or 503 |
 
@@ -322,10 +348,10 @@ erDiagram
 | What changes | Nothing, this is the current design. | Rewrite the app in Swift, run Whisper in the app, drop FastAPI and PostgreSQL. | Move the backend and database to a server, add login. |
 | Pros | One language. Backend testable alone with real PostgreSQL. Matches the plan and passed its spikes. Clean path to more clients later. | One process, no Docker, no LaunchAgent, simplest install. | Multi-device, no local database to run. |
 | Cons | Two processes and Docker to keep running. py2app packaging is fragile. Whisper RAM (about 0.8 GB). | Throws away built and tested code. Swift expertise needed. Whisper in Swift is a separate project. | Audio and notes leave the Mac. Needs auth, hosting, cost. Out of scope in the plan. |
-| Size | 0 now. | Large rewrite (a rewrite of about 1,230 lines of Python source today). | Large (auth, deploy, security). |
+| Size | 0 now. | Large rewrite (a rewrite of about 1,340 lines of Python source today). | Large (auth, deploy, security). |
 | Risks | Install friction on a clean Mac (unproven). | Schedule, regressions. | Privacy and security. |
 
-**Recommendation: A.** It is built, tested (68 backend and 14 Mac tests) and fits the constraints: private by default, one language, and simple pieces. Spend the next effort on verification (section 14), not on a new structure.
+**Recommendation: A.** It is built, tested (70 backend and 21 Mac tests) and fits the constraints: private by default, one language, and simple pieces. Spend the next effort on verification (section 14), not on a new structure.
 
 ## 11. ADR
 
@@ -337,6 +363,10 @@ erDiagram
 | Intent Parser as a pure function first, model only as a fallback. | Always asking a model. | Fast, free, testable. Ordinary notes never leave the machine. |
 | Gemini behind an interface, opt-in by `GEMINI_API_KEY`. | Local Ollama 3B or 1B. | 3B needs about 2.6 GB loaded. 1B answered "Home" for nearly everything in testing. Interface keeps a local model possible later. |
 | Forced JSON reply with an enum of existing names plus "none". | Free text parsing. | Nothing to parse, and no invented categories. |
+| Global hotkey through Carbon `RegisterEventHotKey` (Ctrl+Option+R). | `NSEvent` global monitor on Ctrl+Option+Space. | The monitor needs Input Monitoring (not granted, so it never fired), cannot take the key from the system, and the old key combination is also a system shortcut. |
+| Local builds signed with a self-signed certificate (`build_dev.sh`). | Ad-hoc signature (the py2app default). | An ad-hoc signature changes with every build, so macOS asked for the microphone again each time. |
+| Whisper language fixed to English by default (`WHISPER_LANGUAGE`). | Auto-detect. | Auto-detect picked Russian for a short clip and produced nonsense. |
+| A sticky closes only after the backend confirms the delete. | Closing at once. | A failed delete would otherwise come back on relaunch. |
 | `/health` checks the database. Classifier status never fails it. | Plain "ok". | Honest offline state in the app, and a Gemini outage is not "backend down". |
 | Plain polling of `/health` by the app. | Push or websocket. | Simplest, enough for one user (3 s and 15 s). |
 | Backend as a per-user LaunchAgent, database in Docker. | Login item, or Homebrew PostgreSQL service. | Restarts after crash, no root. Docker keeps the database off the user's own PostgreSQL (port 5433). |
@@ -347,43 +377,44 @@ erDiagram
 - **Security.** No authentication. Safe only while the backend listens on `127.0.0.1`. The API key belongs in `.env` or the LaunchAgent environment, never in the repository (`.env` is git-ignored).
 - **Reliability.** Backend restarts by itself (`KeepAlive`). The app reconnects and redraws. A classifier failure never blocks a note. Gap: audio is lost when the backend is down for more than the 3 tries.
 - **Idempotency.** Same note id gives the same note (tests: `backend/tests/test_voice_api.py`, `test_notes_api.py`).
-- **Performance.** Whisper about 1.3 s for an 8.8 s clip (plan, Spike C). A voice note took 1.5 s end to end in a local run. Gemini adds 2 to 3 s when it runs. Transcription is serial because of the lock.
-- **Environments.** Python 3.13 only (`av` must stay below 19). macOS with Input Monitoring and Microphone permissions. Docker Desktop for PostgreSQL. Tests use a separate `stick_test` database.
+- **Performance.** Whisper about 1.3 s for an 8.8 s clip (plan, Spike C). A voice note took 1.5 s end to end in a local run. Gemini adds 2 to 3 s when it runs, but 13 to 24 s were seen on 2026-11-04, and a failed DNS lookup took about 30 s (the 8 s timeout does not cover it). Transcription is serial because of the lock.
+- **Environments.** Python 3.13 only (`av` must stay below 19). macOS with Microphone permission (no Input Monitoring). Docker Desktop for PostgreSQL. Tests use a separate `stick_test` database.
 
 ## 13. Files and size
 
 | File or folder | Role | Approx. lines |
 |---|---|---|
-| `backend/app/` (api, domain, db, speech, classify, main, log) | FastAPI backend | 640 |
+| `backend/app/` (api, domain, db, speech, classify, main, log) | FastAPI backend | 653 |
 | `backend/migrations/` | One Alembic migration | 35 |
-| `backend/tests/` | 68 tests, real PostgreSQL, fakes for audio and Gemini | 706 with the Mac tests |
-| `mac/stick/` | Menu-bar app | 590 |
-| `mac/tests/` | 14 tests (placement, API client, monitor) | see tests total |
-| `mac/packaging/` | py2app setup, entitlements, `release.sh` | about 80 |
-| `deploy/` | LaunchAgent template and install script | about 70 |
+| `backend/tests/` | 70 tests, real PostgreSQL, fakes for audio and Gemini | 551 |
+| `mac/stick/` | Menu-bar app | 759 |
+| `mac/tests/` | 21 tests (placement, API client, monitor, recorder) | 237 |
+| `mac/packaging/` | py2app setup, entitlements, `build_dev.sh`, `release.sh` | 112 |
+| `deploy/` | LaunchAgent template and install script | 86 |
 | `docker-compose.yml`, `.env.example`, `README.md` | Setup and manual checklist | about 200 |
 
-Source counts for `backend/app` and `mac/stick` are from `wc -l`. All test files together are 706 lines (`wc -l`, backend and Mac). Packaging, deploy and docs counts are rough estimates.
+Line counts for source, tests, packaging and deploy are from `wc -l` on 2026-11-04. The docs count is a rough estimate.
 
 ## 14. Work plan
 
 Everything in Phases 0 to 5 is built. What remains, in order:
-1. **Manual checklist on the real Mac** (README, 8 steps): hotkey, real microphone, denied microphone, Space switching, relaunch. Nothing else can be called "done" until this passes.
+1. **Finish the manual checklist on the real Mac** (README, 8 steps). Done by the owner: hotkey, microphone, sticky creation, drag, delete. Still open: denied microphone, silence, Space switching, relaunch, backend offline.
 2. **LaunchAgent**: installed, and restart after a kill was verified (back in about 3 s). Still open: start after a real login, and Docker Desktop starting at login.
 3. ~~Delete temporary audio~~ done.
 4. **Decide on the Apple Developer account**, then run `release.sh` and test the signed app on a second Mac or a fresh user.
 5. **Decide the open product questions** in section 15 (delete, positions, offline queue).
-6. **Gemini**: data use checked (free tier: content may be used to improve products and read by reviewers). Timeout default raised to 8 s. Rate limits could not be found in the docs.
-7. **Update the Phase 1 to 4 C4 pages**, which still list some built files as planned.
+6. **Gemini**: data use checked (free tier: content may be used to improve products and read by reviewers). Timeout default 8 s. Rate limits could not be found in the docs. Latency was 13 to 24 s on 2026-11-04, and a DNS failure ignored the timeout (31 s for one note): bound the whole call, for example by running it in a thread with a deadline.
+7. ~~Save sticky positions~~ done (local file per Mac).
+8. **Add tests** for the Mac app's untested parts (`app.py`, `hotkey.py`, `sticky.py` have none; measured Mac coverage was 36% and backend 91% before the sticky position code).
 
 ## 15. Questions for the ticket owner
 
-1. Is an Apple Developer account available? Without it the app cannot be signed or notarized, and a clean-Mac install is unproven.
-2. Is it acceptable that vague category requests send note text and category names to Google? If not, the fallback should be turned off or replaced by a local model.
+1. Is an Apple Developer account available? Without it the app cannot be signed for other Macs or notarized, and a clean-Mac install is unproven.
+2. Is it acceptable that vague category requests send note text and category names to Google (and may be read by reviewers on the free tier)? If not, remove the key or use a local model.
+3. Should every note get an automatic category (a tried and reverted option)? It was built on 2026-11-04 and reverted the same day because notes took too long. It would need a hard deadline on the call first.
 3. When the backend is down, should spoken notes be kept and uploaded later (an offline queue), or is "speak again" acceptable?
-4. Do stickies need to be deletable or editable, and should their positions survive a relaunch? The plan lists both as undecided.
+4. Stickies are now deletable, draggable, and their positions are saved on this Mac. Should the category be editable, and should positions sync between Macs?
 5. Is this single-user, single-Mac only? Multi-device would need authentication and a hosted backend.
-6. Should recorded audio be deleted right after upload? (It is not today.)
 
 </script>
 <script type="module">

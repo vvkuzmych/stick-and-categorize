@@ -53,7 +53,7 @@ class MenuTarget(NSObject):
 class Controller:
     def __init__(self) -> None:
         self.recorder = Recorder()
-        self.board = StickyBoard(self.delete_note)
+        self.board = StickyBoard(self.delete_note, settings.PositionStore())
         self.client = ApiClient(settings.get_backend_url())
         self.hotkey = HotkeyListener(self.toggle)
         self.busy = 0  # uploads in flight
