@@ -7,7 +7,7 @@ from app.main import app
 def test_health_ok_when_database_answers(client):
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "ollama": "disabled"}
+    assert response.json() == {"status": "ok", "classifier": {"provider": "none", "status": "disabled"}}
 
 
 def test_health_is_503_when_database_is_down(client):
@@ -21,10 +21,12 @@ def test_health_is_503_when_database_is_down(client):
     assert response.json() == {"status": "database unavailable"}
 
 
-def test_health_reports_ollama_without_failing_when_it_is_down(client):
+def test_health_reports_classifier_without_failing_when_it_is_down(client):
     class Down:
-        def is_up(self):
-            return False
+        name = "gemini"
+
+        def status(self):
+            return "unreachable"
 
     app.state.classifier = Down()
     try:
@@ -32,4 +34,7 @@ def test_health_reports_ollama_without_failing_when_it_is_down(client):
     finally:
         del app.state.classifier
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "ollama": "unreachable"}
+    assert response.json() == {
+        "status": "ok",
+        "classifier": {"provider": "gemini", "status": "unreachable"},
+    }

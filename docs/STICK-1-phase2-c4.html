@@ -139,7 +139,7 @@ Every green box on Level 3 has one card below. Level 2 has no green box.
 <li>Tests pass a fake that returns fixed text, so most tests run in milliseconds.</li>
 <li>A cloud implementation can replace the local one later without other changes.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>backend/app/speech/transcriber.py</code> (planned path).</p>
+<p class="where"><b>Where.</b> <code>backend/app/speech/transcriber.py</code> (built).</p>
 </div>
 <div class="card t1">
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
@@ -152,7 +152,7 @@ Every green box on Level 3 has one card below. Level 2 has no green box.
 <li>Uses the settings measured in Phase 0: model <code>small</code>, CPU, <code>int8</code>.</li>
 <li><code>faster-whisper</code> and the pinned <code>av&lt;19</code> move into the main dependencies.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>backend/app/speech/faster_whisper.py</code> (planned path), created in <code>main.py</code>.</p>
+<p class="where"><b>Where.</b> <code>backend/app/speech/faster_whisper.py</code> (built), created in <code>main.py</code>.</p>
 </div>
 <div class="card t1">
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
@@ -165,7 +165,7 @@ Every green box on Level 3 has one card below. Level 2 has no green box.
 <li>Removes the phrase from the text. Without such a phrase the category stays empty.</li>
 <li>No database, no network, so it is covered by table tests with many phrasings and false-positive cases.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>backend/app/domain/intent.py</code> (planned path).</p>
+<p class="where"><b>Where.</b> <code>backend/app/domain/intent.py</code> (built).</p>
 </div>
 <div class="card t1">
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
@@ -178,7 +178,7 @@ Every green box on Level 3 has one card below. Level 2 has no green box.
 <li>Rejects a clip over the length limit. The limit values are not set in the plan.</li>
 <li>Returns an error the client can show, and saves nothing.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>backend/app/api/limits.py</code> (planned path), used by the Notes Router.</p>
+<p class="where"><b>Where.</b> <code>backend/app/api/limits.py</code> (built), used by the Notes Router.</p>
 </div>
 <div class="card t1">
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
@@ -191,7 +191,7 @@ Every green box on Level 3 has one card below. Level 2 has no green box.
 <li>If the transcript is empty, returns an error and saves nothing.</li>
 <li>Tested with a fake Transcriber, so the pipeline test needs no model.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>backend/app/domain/voice.py</code> (planned path).</p>
+<p class="where"><b>Where.</b> <code>backend/app/domain/voice.py</code> (built).</p>
 </div>
 </div>
 

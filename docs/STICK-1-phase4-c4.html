@@ -152,7 +152,7 @@ Every green box on Levels 2 and 3 has one card below. The README and manual test
 <li>Starts at login and restarts after a crash.</li>
 <li>Sets <code>DATABASE_URL</code> and writes output to a log file.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>deploy/dev.stick.backend.plist</code> and an install step in the README (planned paths). Installed in <code>~/Library/LaunchAgents/</code>.</p>
+<p class="where"><b>Where.</b> <code>deploy/dev.stick.backend.plist</code>, <code>deploy/install_backend.sh</code> and the README (built). Installed in <code>~/Library/LaunchAgents/</code>.</p>
 </div>
 <div class="card t1">
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
@@ -165,7 +165,7 @@ Every green box on Levels 2 and 3 has one card below. The README and manual test
 <li>Logs the note id, the result and the time taken for voice uploads. It does not log the note text.</li>
 <li>Log level is set by an environment variable.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>backend/app/logging.py</code> (planned path), set up in <code>backend/app/main.py</code>.</p>
+<p class="where"><b>Where.</b> <code>backend/app/log.py</code> (built), set up in <code>backend/app/main.py</code>.</p>
 </div>
 <div class="card t1">
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
@@ -178,7 +178,7 @@ Every green box on Levels 2 and 3 has one card below. The README and manual test
 <li>Submits to Apple's notary service and waits for the answer.</li>
 <li>Staples the ticket so the app opens offline. Certificate and credentials come from the developer's keychain, never from the repo.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>mac/packaging/release.sh</code> (planned path). Needs an Apple Developer account: not verified that one exists.</p>
+<p class="where"><b>Where.</b> <code>mac/packaging/release.sh</code> (built). Needs an Apple Developer account: not verified that one exists.</p>
 </div>
 <div class="card t1">
 <div class="card-head"><span class="badge">NEW</span><span class="tier">Tier 1</span></div>
@@ -191,7 +191,7 @@ Every green box on Levels 2 and 3 has one card below. The README and manual test
 <li>Offline: the menu shows "backend offline". Online again: it triggers Launch Sync.</li>
 <li>Runs in a background thread and never blocks the hotkey.</li>
 </ul>
-<p class="where"><b>Where.</b> <code>mac/stick/connection.py</code> (planned path), started from <code>mac/stick/app.py</code>.</p>
+<p class="where"><b>Where.</b> <code>mac/stick/connection.py</code> (built), started from <code>mac/stick/app.py</code>.</p>
 </div>
 </div>
 

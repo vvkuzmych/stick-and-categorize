@@ -1,0 +1,398 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>STICK-1: Voice stickies on the Mac desktop — Architecture</title>
+<style>body{font-family:-apple-system,Segoe UI,sans-serif;max-width:1200px;margin:40px auto;padding:0 24px;color:#222;line-height:1.5}
+h2{border-bottom:1px solid #ddd;padding-bottom:6px;margin-top:48px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:8px;text-align:left;vertical-align:top}
+th{background:#f4f6f8}code{background:#f4f6f8;padding:1px 4px;border-radius:3px}pre:not(.mermaid){background:#f4f6f8;padding:12px;border-radius:6px;overflow:auto}
+.mermaid{background:#fafbfc;border:1px solid #e5e7eb;border-radius:8px;padding:16px;text-align:center}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin:16px 0}.card{border:1px solid #c8e6c9;border-left:6px solid #2e7d32;border-radius:8px;padding:16px 18px;background:#f6fbf6}.card.t2{border-left-style:dashed}.card h3{margin:6px 0 10px;font-size:1.1em}.card p{margin:8px 0}.card ul{margin:4px 0 8px;padding-left:20px}.card li{margin:3px 0}.card-head{display:flex;gap:8px;align-items:center}.badge{background:#2e7d32;color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px}.tier{font-size:12px;color:#1b5e20;border:1px solid #2e7d32;padding:1px 8px;border-radius:10px}.card.t2 .tier{border-style:dashed}.card .why{background:#fff8e1;border-radius:6px;padding:8px 10px}
+@media(max-width:900px){.cards{grid-template-columns:1fr}}</style></head><body><div id="out">Loading…</div>
+<script id="src" type="text/markdown">
+# STICK-1: Voice stickies on the Mac desktop — Architecture
+
+Status: as built after Phases 0 to 5 (commit `470cb86`), plus the risks and open decisions that remain. Recommended option: keep the current two-part design (a Python menu-bar app and a local Python backend with PostgreSQL), and spend the next effort on verification and hardening, not on new structure.
+
+## 1. Summary
+
+**What we are doing.** A Mac menu-bar app records a voice note when the user presses Ctrl+Option+Space. A local backend turns the audio into text, finds an optional category, stores the note, and the app shows it as a sticky window on the desktop. All code is Python.
+
+**Recommended option.** Option A: keep the app and the backend as two processes. The app only records, uploads and draws. The backend owns transcription, categories and storage. The category fallback uses Google Gemini and is opt-in.
+
+**Key risks**
+- **Not tested end to end by a person.** The hotkey, the real microphone, Input Monitoring permission and Space switching were never verified on a real run (they need a human at the Mac).
+- **Signing and notarization were never run.** `mac/packaging/release.sh` exists but no Apple Developer certificate is known, so a clean-Mac install is unproven.
+- **Privacy.** With a Gemini key set, note text and category names leave the Mac. Recorded audio used to stay in temporary folders (fixed: it is now deleted after the upload attempt). On the free Gemini tier, Google's terms allow it to use submitted content to improve products and let human reviewers read it.
+- **No access control.** The backend has no authentication (a search of `backend/app` for auth, cors and token finds nothing). It listens on `127.0.0.1` only when started by the LaunchAgent (`deploy/dev.stick.backend.plist:13-16`). Started by hand with the README command, it uses uvicorn's default host.
+- **Lost audio.** If the backend is down when a note is spoken, the audio is not queued. After 3 tries the upload fails and the user must speak again (`mac/stick/api.py:87-95`).
+
+## 2. Inputs
+
+**Ticket (brief).** "The whole project": the STICK-1 plan in `.scratch/stick-1/implementation-plan.md`, Phases 0 to 5. Voice in, sticky out, categories from speech, nothing lost on retry, backend survives restarts, optional smart category fallback.
+
+**Files used.** `.scratch/stick-1/implementation-plan.md`, `README.md`, `docker-compose.yml`, `deploy/`, `mac/packaging/`, all of `backend/app/`, `backend/migrations/`, all of `mac/stick/`, and the tests in `backend/tests/` and `mac/tests/`. Earlier pages `docs/STICK-1-c4.html` and `docs/STICK-1-phase0` to `phase5-c4.html` were read as context, not as truth.
+
+**Scope.** This repository only. No adjacent repositories. This document changes no code.
+
+**Group split**
+- **In scope (built).** Recording, upload, transcription, intent parsing, categories, notes API, sticky windows, launch sync, reconnect, logging, health, LaunchAgent, release script, Gemini fallback.
+- **Out of scope (plan says "not planned yet").** Editing or deleting stickies, sticky position and colour, offline queue, multi-user or multi-device, cloud transcription.
+- **Needs agreement.** See section 15.
+
+## 3. Current state
+
+| Finding | Evidence | Consequence |
+|---|---|---|
+| The note id is created by the client before any upload. | `mac/stick/app.py:152`, `mac/stick/api.py:83-95` | Retries are safe. A repeated id returns the stored note and skips transcription. |
+| The backend returns an existing note for a repeated id. | `backend/app/domain/voice.py:32-34`, `backend/app/db/repository.py:22-30` | No duplicates, even if two uploads race (insert is `ON CONFLICT DO NOTHING`). |
+| Whisper is loaded once and guarded by a lock. | `backend/app/main.py:25-29`, `backend/app/speech/faster_whisper.py:12-17` | One clip is transcribed at a time. Several quick notes queue up. |
+| An upload that outlives the 60 s client timeout is retried with the same id. | `mac/stick/api.py:11`, `api.py:106-107`, `api.py:92` | The timeout is treated as "unreachable". The backend may transcribe the same clip twice (wasted work), but still stores one note. |
+| Category comes from two phrases, else from Gemini if asked in words. | `backend/app/domain/intent.py:7-10`, `intent.py:54-56`, `backend/app/domain/voice.py:39-40` | Ordinary notes never call Gemini. The phrase list for "asked in words" is a guess, not tested on real speech. |
+| Category matching ignores case and extra spaces; a unique index settles races. | `backend/app/domain/categories.py:5-18`, `backend/migrations/versions/0001_notes_and_categories.py:20` | "Work" and "work" are one category. Gemini cannot create a new one. |
+| `/health` is 200 only if the database answers. The classifier status never fails it. | `backend/app/main.py:44-54` | "Backend offline" in the app also covers a dead database. |
+| The app polls `/health` every 3 s offline and every 15 s online, and re-syncs on every return. | `mac/stick/connection.py:5-6`, `mac/stick/app.py:96-101` | Stickies reappear without relaunch. Each poll runs `select 1`. |
+| Stickies are drawn once per note id. Nothing removes or moves them. | `mac/stick/sticky.py:61-62`, `sticky.py:59` | Fine while notes are never deleted. Positions are recomputed on every launch, so they can change if the screen changes. |
+| The app keeps no notes of its own. | `mac/stick/app.py:1`, `mac/stick/sync.py:4-6` | One source of truth (the database). No local queue for offline use. |
+| Recorded audio is written to a temporary folder and deleted after the upload attempt ends (fixed after this review). | `mac/stick/recorder.py` (`discard_recording`), `mac/stick/app.py` (`upload`) | Recordings no longer accumulate. Before the fix they stayed in the temp area. |
+| Audio is limited to 10 MB and 60 s; empty speech gives 422. | `backend/app/api/limits.py:6-31`, `backend/app/api/notes.py:92-97` | Clear errors. The app shows the message from the backend. |
+| A database connection is held during transcription and the Gemini call. | `backend/app/db/session.py:19-27`, `backend/app/domain/voice.py:32-41` | Fine for one user. Many parallel uploads would hold many connections (not measured). |
+| Database runs in Docker on host port 5433 and restarts with Docker Desktop. | `docker-compose.yml:2-9`, `README.md:53` | Backend start also depends on Docker Desktop starting at login (not verified on a fresh login). |
+| The first run downloads the Whisper model from the internet. | `README.md:59` | An offline first start fails to load the model. |
+
+## 4. C4 level 1: Context
+
+```mermaid
+flowchart TB
+  user(["👤 User<br/>speaks a note, reads stickies"])
+  subgraph boundary["System boundary"]
+    sys["Stick and Categorize<br/>voice note → desktop sticky"]
+  end
+  macos["macOS<br/>microphone, hotkey, desktop windows, launchd"]
+  gemini["Google Gemini API<br/>optional category fallback"]
+  hf["Whisper model download<br/>first run only"]
+  user -->|"hotkey + voice"| sys
+  sys -->|"stickies"| user
+  sys -->|"uses"| macos
+  sys -.->|"note text + category names"| gemini
+  sys -.->|"model files"| hf
+  classDef person fill:#08427b,stroke:#052e56,color:#fff
+  classDef external fill:#999,stroke:#666,color:#fff
+  classDef sysc fill:#1168bd,stroke:#0b4884,color:#fff
+  class user person
+  class sys sysc
+  class macos,gemini,hf external
+```
+
+The user talks only to the Mac. Two internet links exist and both are optional at run time: Gemini (only for vague category requests) and the one-time model download.
+
+## 5. C4 level 2: Containers
+
+```mermaid
+flowchart LR
+  user(["👤 User"])
+  subgraph mac["Mac client (Python, PyObjC)"]
+    app["Stick.app<br/>menu bar, hotkey, recorder, stickies"]
+  end
+  subgraph be["Backend (Python, FastAPI)"]
+    api["Backend API<br/>uvicorn on 127.0.0.1:8000"]
+    whisper["Whisper model<br/>in the API process"]
+  end
+  subgraph store["Storage"]
+    pg[("PostgreSQL 16<br/>Docker, port 5433")]
+  end
+  launchd["macOS launchd<br/>LaunchAgent"]
+  gemini["Google Gemini API"]
+  user -->|"hotkey + voice"| app
+  app -->|"HTTP: /notes, /notes/voice, /health"| api
+  api --> whisper
+  api -->|"SQL"| pg
+  api -.->|"HTTPS"| gemini
+  launchd -->|"starts, restarts"| api
+  classDef person fill:#08427b,stroke:#052e56,color:#fff
+  classDef external fill:#999,stroke:#666,color:#fff
+  classDef chg fill:#f9a825,stroke:#e65100,color:#000
+  classDef new fill:#2e7d32,stroke:#1b5e20,color:#fff
+  class user person
+  class launchd,gemini external
+  class app,api,pg,whisper new
+```
+
+Everything is new here, because this document covers the whole project (green = built in Phases 0 to 5). The only link that leaves the Mac in normal use is the dotted one to Gemini. The Whisper model lives inside the API process, not in a separate service.
+
+## 6. C4 level 3: Components of the Backend API
+
+```mermaid
+flowchart TB
+  subgraph api["Backend API (FastAPI)"]
+    router["Notes Router<br/>POST /notes, POST /notes/voice, GET /notes, GET /categories"]
+    health["Health Check<br/>GET /health"]
+    limits["Audio Limits<br/>size and length"]
+    voice["Voice Note Service<br/>transcribe, parse, classify, save"]
+    tr["Transcriber<br/>faster-whisper small, int8"]
+    parser["Intent Parser<br/>in category X"]
+    detect["Category Request Detector"]
+    cls["Category Classifier<br/>Gemini"]
+    notes["Note Service<br/>idempotent create"]
+    cats["Category Service<br/>case-insensitive find or create"]
+    repo["Repository<br/>only code with SQL"]
+    logs["Logging<br/>no note text"]
+  end
+  pg[("PostgreSQL")]
+  gemini["Gemini API"]
+  router --> limits
+  router --> voice
+  router --> notes
+  health --> pg
+  voice --> tr
+  voice --> parser
+  voice --> detect
+  voice -.-> cls
+  voice --> notes
+  cls -.-> gemini
+  notes --> cats
+  notes --> repo
+  cats --> repo
+  repo --> pg
+  router --> logs
+  classDef external fill:#999,stroke:#666,color:#fff
+  classDef ok fill:#fff,stroke:#333,color:#000
+  class pg,gemini external
+  class router,health,limits,voice,tr,parser,detect,cls,notes,cats,repo,logs ok
+```
+
+The layers are strict: the router talks HTTP, services hold rules, and only the Repository writes SQL (`backend/app/db/repository.py:11`). The Transcriber and the Classifier are interfaces (`backend/app/speech/transcriber.py:5`, `backend/app/classify/classifier.py:13`), so tests use fakes and the engines can be swapped.
+
+## 7. Sequence diagrams
+
+### 7.1 Happy path: voice note to sticky
+
+```mermaid
+sequenceDiagram
+  actor U as User
+  participant A as Stick.app
+  participant B as Backend API
+  participant W as Whisper
+  participant D as PostgreSQL
+  U->>A: Ctrl+Option+Space, speak, press again
+  A->>A: record WAV, make note id (uuid)
+  A->>B: POST /notes/voice (id, audio)
+  B->>B: check size and length
+  B->>D: get note by id (none)
+  B->>W: transcribe
+  W-->>B: text
+  B->>B: parse intent, maybe ask classifier
+  B->>D: insert note (ON CONFLICT DO NOTHING)
+  B-->>A: 201 note (id, text, category, created_at)
+  A->>U: new sticky on the desktop
+```
+
+The id exists before the upload, which is what makes every later retry safe.
+
+### 7.2 Failure: backend is down at launch, then comes back
+
+```mermaid
+sequenceDiagram
+  participant A as Stick.app
+  participant M as Connection Monitor
+  participant L as launchd
+  participant B as Backend API
+  A->>M: start
+  M->>B: GET /health
+  B--xM: connection refused
+  M-->>A: offline
+  A->>A: icon warning, status "Backend offline"
+  L->>B: start backend (login or restart after crash)
+  loop every 3 s while offline
+    M->>B: GET /health
+  end
+  B-->>M: 200 ok
+  M-->>A: online
+  A->>B: GET /notes
+  B-->>A: all notes
+  A->>A: draw stickies, icon back to normal
+```
+
+The app never needs a relaunch. After the first success it checks every 15 s.
+
+### 7.3 Failure: slow upload, repeated call, race
+
+```mermaid
+sequenceDiagram
+  participant A as Stick.app
+  participant B as Backend API
+  participant W as Whisper (one at a time)
+  participant D as PostgreSQL
+  A->>B: POST /notes/voice (id=X)
+  B->>W: transcribe (slow)
+  Note over A: 60 s timeout, seen as unreachable
+  A->>B: retry POST /notes/voice (id=X)
+  B->>D: get note X (not saved yet)
+  B->>W: transcribe again (waits for the lock)
+  W-->>B: text (first request)
+  B->>D: insert X
+  W-->>B: text (second request)
+  B->>D: insert X (conflict, ignored)
+  B-->>A: 200 existing note X
+  A->>A: show note once (dedup by id)
+```
+
+Result: one note, one sticky. The cost is a second transcription of the same clip. A shorter wait for the lock or an in-flight check would remove it, but it is not needed for correctness.
+
+### 7.4 Failure: Gemini is slow, wrong, or has no key
+
+```mermaid
+sequenceDiagram
+  participant B as Voice Note Service
+  participant C as Gemini Classifier
+  participant G as Gemini API
+  participant D as PostgreSQL
+  B->>B: parser found no name, text asked for a category
+  B->>D: list existing category names
+  alt no categories yet or no key
+    B->>D: save note without category
+  else call Gemini
+    B->>C: classify(text, names)
+    C->>G: HTTPS, forced JSON, timeout 5 s
+    alt error, timeout, bad JSON, or name not in list
+      C-->>B: none
+    else valid existing name
+      C-->>B: name
+    end
+    B->>D: save note (category or none)
+  end
+```
+
+The note is always saved. The classifier can only return a name from the list, so it cannot create categories.
+
+## 8. State diagram
+
+The notes themselves never change after saving. The lifecycle that matters is the app's recording state.
+
+```mermaid
+stateDiagram-v2
+  [*] --> Offline: app starts
+  Offline --> Idle: health check ok, sync done
+  Idle --> Offline: health check fails
+  Idle --> Recording: hotkey and microphone allowed
+  Idle --> Denied: hotkey and microphone refused
+  Denied --> Idle: next hotkey press
+  Recording --> Uploading: hotkey again
+  Uploading --> Idle: sticky shown
+  Uploading --> Idle: error message shown, audio lost
+```
+
+An upload failure goes back to Idle with the backend's message in the menu. There is no "queued" state, which is the missing piece for offline use.
+
+## 9. Data model and contract
+
+```mermaid
+erDiagram
+  CATEGORIES ||--o{ NOTES : "has"
+  CATEGORIES {
+    int id PK
+    text name "as first spoken"
+    text normalized_name UK "casefolded, spaces collapsed"
+  }
+  NOTES {
+    uuid id PK "made by the client"
+    text text
+    int category_id FK "nullable"
+    timestamptz created_at "server default now"
+  }
+```
+
+| Value | Type | Where it comes from |
+|---|---|---|
+| `note.id` | uuid | Generated by the app before upload (`mac/stick/api.py:46`). |
+| `note.text` | text | Whisper output with the category phrase removed (`backend/app/domain/intent.py`). |
+| `note.category` | text or null | Spoken phrase, else Gemini pick from existing names, else null (`backend/app/domain/voice.py:36-40`). |
+| `note.created_at` | timestamptz | Database default (`backend/app/db/models.py:26`). |
+| Backend URL | string | `NSUserDefaults`, default `http://127.0.0.1:8000` (`mac/stick/settings.py:3-8`). |
+
+| Endpoint | In | Out |
+|---|---|---|
+| `POST /notes/voice` | form: `id` (uuid), `audio` (file) | 201 new note, 200 existing note, 413 too big, 422 unreadable, too long, or no speech |
+| `POST /notes` | json: `id`, `text`, optional `category` | 201 or 200 note |
+| `GET /notes` | none | notes, oldest first |
+| `GET /categories` | none | list of names |
+| `GET /health` | none | 200 `{status, classifier{provider, status}}` or 503 |
+
+## 10. Options comparison
+
+| | A: Python app + local Python backend (built) | B: One native Swift app, SQLite, no backend | C: Hosted backend in the cloud |
+|---|---|---|---|
+| What changes | Nothing, this is the current design. | Rewrite the app in Swift, run Whisper in the app, drop FastAPI and PostgreSQL. | Move the backend and database to a server, add login. |
+| Pros | One language. Backend testable alone with real PostgreSQL. Matches the plan and passed its spikes. Clean path to more clients later. | One process, no Docker, no LaunchAgent, simplest install. | Multi-device, no local database to run. |
+| Cons | Two processes and Docker to keep running. py2app packaging is fragile. Whisper RAM (about 0.8 GB). | Throws away built and tested code. Swift expertise needed. Whisper in Swift is a separate project. | Audio and notes leave the Mac. Needs auth, hosting, cost. Out of scope in the plan. |
+| Size | 0 now. | Large rewrite (a rewrite of about 1,230 lines of Python source today). | Large (auth, deploy, security). |
+| Risks | Install friction on a clean Mac (unproven). | Schedule, regressions. | Privacy and security. |
+
+**Recommendation: A.** It is built, tested (68 backend and 14 Mac tests) and fits the constraints: private by default, one language, and simple pieces. Spend the next effort on verification (section 14), not on a new structure.
+
+## 11. ADR
+
+| Decision | Rejected alternative | Reason |
+|---|---|---|
+| Python for app and backend, PyObjC for AppKit. | Swift for the app. | Spike A passed: desktop-level panel, all Spaces, hotkey, microphone, py2app (plan: Phase 0). |
+| Client-made note id plus `ON CONFLICT DO NOTHING`. | Server-made ids with a de-duplication table. | Retries and races give one note with no extra table (`backend/app/db/repository.py:22-30`). |
+| Local faster-whisper `small`, int8, loaded once. | Cloud transcription. | Private, no quota, about 7x faster than real time on the dev Mac (plan, Spike C). |
+| Intent Parser as a pure function first, model only as a fallback. | Always asking a model. | Fast, free, testable. Ordinary notes never leave the machine. |
+| Gemini behind an interface, opt-in by `GEMINI_API_KEY`. | Local Ollama 3B or 1B. | 3B needs about 2.6 GB loaded. 1B answered "Home" for nearly everything in testing. Interface keeps a local model possible later. |
+| Forced JSON reply with an enum of existing names plus "none". | Free text parsing. | Nothing to parse, and no invented categories. |
+| `/health` checks the database. Classifier status never fails it. | Plain "ok". | Honest offline state in the app, and a Gemini outage is not "backend down". |
+| Plain polling of `/health` by the app. | Push or websocket. | Simplest, enough for one user (3 s and 15 s). |
+| Backend as a per-user LaunchAgent, database in Docker. | Login item, or Homebrew PostgreSQL service. | Restarts after crash, no root. Docker keeps the database off the user's own PostgreSQL (port 5433). |
+
+## 12. Non-functional requirements
+
+- **Privacy.** Audio and text stay on the Mac. Exceptions: Gemini (note text and category names, only if a key is set and a category was asked for in words) and the first Whisper model download. Logs hold note ids and timings, not note text (`backend/app/api/notes.py:93-100`). Temporary audio is deleted after each upload attempt.
+- **Security.** No authentication. Safe only while the backend listens on `127.0.0.1`. The API key belongs in `.env` or the LaunchAgent environment, never in the repository (`.env` is git-ignored).
+- **Reliability.** Backend restarts by itself (`KeepAlive`). The app reconnects and redraws. A classifier failure never blocks a note. Gap: audio is lost when the backend is down for more than the 3 tries.
+- **Idempotency.** Same note id gives the same note (tests: `backend/tests/test_voice_api.py`, `test_notes_api.py`).
+- **Performance.** Whisper about 1.3 s for an 8.8 s clip (plan, Spike C). A voice note took 1.5 s end to end in a local run. Gemini adds 2 to 3 s when it runs. Transcription is serial because of the lock.
+- **Environments.** Python 3.13 only (`av` must stay below 19). macOS with Input Monitoring and Microphone permissions. Docker Desktop for PostgreSQL. Tests use a separate `stick_test` database.
+
+## 13. Files and size
+
+| File or folder | Role | Approx. lines |
+|---|---|---|
+| `backend/app/` (api, domain, db, speech, classify, main, log) | FastAPI backend | 640 |
+| `backend/migrations/` | One Alembic migration | 35 |
+| `backend/tests/` | 68 tests, real PostgreSQL, fakes for audio and Gemini | 706 with the Mac tests |
+| `mac/stick/` | Menu-bar app | 590 |
+| `mac/tests/` | 14 tests (placement, API client, monitor) | see tests total |
+| `mac/packaging/` | py2app setup, entitlements, `release.sh` | about 80 |
+| `deploy/` | LaunchAgent template and install script | about 70 |
+| `docker-compose.yml`, `.env.example`, `README.md` | Setup and manual checklist | about 200 |
+
+Source counts for `backend/app` and `mac/stick` are from `wc -l`. All test files together are 706 lines (`wc -l`, backend and Mac). Packaging, deploy and docs counts are rough estimates.
+
+## 14. Work plan
+
+Everything in Phases 0 to 5 is built. What remains, in order:
+1. **Manual checklist on the real Mac** (README, 8 steps): hotkey, real microphone, denied microphone, Space switching, relaunch. Nothing else can be called "done" until this passes.
+2. **LaunchAgent**: installed, and restart after a kill was verified (back in about 3 s). Still open: start after a real login, and Docker Desktop starting at login.
+3. ~~Delete temporary audio~~ done.
+4. **Decide on the Apple Developer account**, then run `release.sh` and test the signed app on a second Mac or a fresh user.
+5. **Decide the open product questions** in section 15 (delete, positions, offline queue).
+6. **Gemini**: data use checked (free tier: content may be used to improve products and read by reviewers). Timeout default raised to 8 s. Rate limits could not be found in the docs.
+7. **Update the Phase 1 to 4 C4 pages**, which still list some built files as planned.
+
+## 15. Questions for the ticket owner
+
+1. Is an Apple Developer account available? Without it the app cannot be signed or notarized, and a clean-Mac install is unproven.
+2. Is it acceptable that vague category requests send note text and category names to Google? If not, the fallback should be turned off or replaced by a local model.
+3. When the backend is down, should spoken notes be kept and uploaded later (an offline queue), or is "speak again" acceptable?
+4. Do stickies need to be deletable or editable, and should their positions survive a relaunch? The plan lists both as undecided.
+5. Is this single-user, single-Mac only? Multi-device would need authentication and a hosted backend.
+6. Should recorded audio be deleted right after upload? (It is not today.)
+
+</script>
+<script type="module">
+import { marked } from "https://cdn.jsdelivr.net/npm/marked@12/lib/marked.esm.js";
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+const r=new marked.Renderer();const base=r.code.bind(r);
+r.code=(code,lang)=>{const t=typeof code==="object"?code.text:code;const l=typeof code==="object"?code.lang:lang;
+ if(l==="mermaid"){const p=document.createElement("pre");p.className="mermaid";p.textContent=t;return p.outerHTML;}return base(code,lang);};
+document.getElementById("out").innerHTML=marked.parse(document.getElementById("src").textContent,{renderer:r});
+mermaid.initialize({startOnLoad:false,theme:"default",securityLevel:"loose"});
+const els=[...document.querySelectorAll(".mermaid")];for(let i=0;i<els.length;i++){const el=els[i];const src=el.textContent;try{const {svg}=await mermaid.render("diag"+i,src);el.innerHTML=svg;el.setAttribute("data-processed","true");}catch(e){el.textContent="Syntax error: "+e.message;}}
+</script></body></html>

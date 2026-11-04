@@ -1,4 +1,5 @@
 """Microphone recording with AVAudioEngine, started and stopped on demand."""
+import shutil
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -8,6 +9,7 @@ from Foundation import NSURL
 from PyObjCTools import AppHelper
 
 AUTHORIZED, NOT_ASKED = 3, 0
+TEMP_PREFIX = "stick-"
 
 DENIED_MESSAGE = (
     "Microphone access is off. Turn it on in System Settings > Privacy & Security > Microphone."
@@ -27,6 +29,12 @@ def ensure_permission(done: Callable[[bool], None]) -> None:
         done(False)
 
 
+def discard_recording(path: Path) -> None:
+    """Deletes a finished recording and its temp folder. Only folders made by `Recorder.start`."""
+    if path.parent.name.startswith(TEMP_PREFIX):
+        shutil.rmtree(path.parent, ignore_errors=True)
+
+
 class Recorder:
     def __init__(self) -> None:
         self._engine = None
@@ -39,7 +47,7 @@ class Recorder:
 
     def start(self) -> None:
         """Raises RuntimeError if the audio engine cannot start."""
-        self._path = Path(tempfile.mkdtemp(prefix="stick-")) / "note.wav"
+        self._path = Path(tempfile.mkdtemp(prefix=TEMP_PREFIX)) / "note.wav"
         engine = AV.AVAudioEngine.alloc().init()
         node = engine.inputNode()
         fmt = node.outputFormatForBus_(0)
@@ -48,9 +56,11 @@ class Recorder:
         )
         if audio_file is None:
             raise RuntimeError(f"Cannot open the recording file: {err}")
-        node.installTapOnBus_bufferSize_format_block_(
-            0, 4096, fmt, lambda buffer, _when: audio_file.writeFromBuffer_error_(buffer, None)
-        )
+
+        def write(buffer, _when) -> None:  # the tap block must return None
+            audio_file.writeFromBuffer_error_(buffer, None)
+
+        node.installTapOnBus_bufferSize_format_block_(0, 4096, fmt, write)
         ok, err = engine.startAndReturnError_(None)
         if not ok:
             node.removeTapOnBus_(0)

@@ -72,6 +72,9 @@ class ApiClient:
     def list_notes(self) -> list[Note]:
         return [Note.from_json(n) for n in self._request("GET", "/notes")]
 
+    def delete_note(self, note_id: str) -> None:
+        self._request("DELETE", f"/notes/{note_id}")
+
     def is_up(self) -> bool:
         """True if the backend answers /health with 200 (which includes its database)."""
         try:
@@ -100,7 +103,8 @@ class ApiClient:
         )
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                return json.load(response)
+                raw = response.read()
+                return json.loads(raw) if raw else None  # 204 has no body
         except urllib.error.HTTPError as exc:
             raise ApiError(_detail(exc), exc.code) from exc
         except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:

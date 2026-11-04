@@ -21,6 +21,9 @@ class NoteService:
         self.repo.session.refresh(note)
         return note, created
 
+    def delete(self, note_id: uuid.UUID) -> bool:
+        return self.repo.delete_note(note_id)
+
     def get(self, note_id: uuid.UUID) -> Note | None:
         return self.repo.get_note(note_id)
 

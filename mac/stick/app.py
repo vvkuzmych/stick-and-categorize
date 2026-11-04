@@ -23,7 +23,7 @@ from stick import settings
 from stick.api import ApiClient, ApiError, new_note_id
 from stick.connection import ConnectionMonitor
 from stick.hotkey import HotkeyListener
-from stick.recorder import DENIED_MESSAGE, Recorder, ensure_permission
+from stick.recorder import DENIED_MESSAGE, Recorder, discard_recording, ensure_permission
 from stick.sticky import StickyBoard
 from stick.sync import launch_sync
 
@@ -53,7 +53,7 @@ class MenuTarget(NSObject):
 class Controller:
     def __init__(self) -> None:
         self.recorder = Recorder()
-        self.board = StickyBoard()
+        self.board = StickyBoard(self.delete_note)
         self.client = ApiClient(settings.get_backend_url())
         self.hotkey = HotkeyListener(self.toggle)
         self.busy = 0  # uploads in flight
@@ -146,6 +146,21 @@ class Controller:
         self.item.button().setTitle_("🔴")
         self.set_status("Recording… press the hotkey again to stop")
 
+    # ---- deleting ----
+    def delete_note(self, note_id: str) -> None:
+        """The sticky disappears only after the backend confirms, so it cannot come back on relaunch."""
+        client = self.client
+
+        def work() -> None:
+            try:
+                client.delete_note(note_id)
+            except ApiError as exc:
+                AppHelper.callAfter(self.set_status, exc.message)
+                return
+            AppHelper.callAfter(self.board.remove, note_id)
+
+        threading.Thread(target=work, daemon=True).start()
+
     def _stop(self) -> None:
         audio = self.recorder.stop()
         self.item.button().setTitle_("📝")
@@ -162,6 +177,8 @@ class Controller:
             except ApiError as exc:
                 AppHelper.callAfter(self._upload_failed, exc.message)
                 return
+            finally:
+                discard_recording(audio)  # the backend has the text now, or the upload is over
             AppHelper.callAfter(self._uploaded, note)
 
         threading.Thread(target=work, daemon=True).start()
@@ -182,7 +199,7 @@ def main() -> None:
     controller = Controller()
     controller.build_menu()
     if not controller.hotkey.start():
-        controller.set_status("Hotkey not available (check Input Monitoring)")
+        controller.set_status("Hotkey not available (Ctrl+Option+R is taken)")
     controller.monitor.start()  # runs the launch sync as soon as the backend answers
     quit_after = os.environ.get("STICK_QUIT_AFTER")  # for smoke tests
     if quit_after:

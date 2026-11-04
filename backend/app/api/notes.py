@@ -119,6 +119,14 @@ def list_notes(services: Services) -> list[NoteOut]:
     return [NoteOut.of(n) for n in notes.list()]
 
 
+@router.delete("/notes/{note_id}", status_code=204)
+def delete_note(note_id: uuid.UUID, services: Services) -> Response:
+    """Idempotent: deleting a note that is already gone also answers 204, so a retry is safe."""
+    notes, _ = services
+    notes.delete(note_id)
+    return Response(status_code=204)
+
+
 @router.get("/categories", response_model=list[str])
 def list_categories(services: Services) -> list[str]:
     _, categories = services
