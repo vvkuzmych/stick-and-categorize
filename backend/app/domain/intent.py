@@ -8,6 +8,12 @@ _TRIGGER = re.compile(
     r"(?:\bin\s+(?:the\s+)?category|\bcategori[sz]e\s+(?:this\s+)?as)\s+",
     re.IGNORECASE,
 )
+_REQUEST = re.compile(
+    r"\bcategori[sz]e\b|\bcategory\b"
+    r"|\b(?:put|file|stick|add|move|save|place|sort|tag|label|group)\s+(?:this|it|that)\b"
+    r"|\bthis\s+(?:goes|belongs)\s+(?:with|under|in|to)\b",
+    re.IGNORECASE,
+)
 _WORD = re.compile(r"[\w'-]+")
 
 
@@ -42,3 +48,9 @@ def parse_intent(text: str) -> tuple[str, str | None]:
     else:
         clean = after
     return clean.strip(), " ".join(words)
+
+
+
+def asks_for_category(text: str) -> bool:
+    """True when the user asked for a category in words, even if no name was found."""
+    return _REQUEST.search(text) is not None

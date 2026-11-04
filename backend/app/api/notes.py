@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.api.limits import MAX_AUDIO_BYTES, AudioRejected, check_duration, check_size
+from app.classify.classifier import CategoryClassifier
 from app.db.models import Note
 from app.db.repository import Repository
 from app.db.session import get_session
@@ -65,6 +66,10 @@ def get_transcriber(request: Request) -> Transcriber:
     return request.app.state.transcriber
 
 
+def get_classifier(request: Request) -> CategoryClassifier | None:
+    return getattr(request.app.state, "classifier", None)
+
+
 @router.post("/notes/voice", response_model=NoteOut, status_code=201)
 def create_voice_note(
     id: Annotated[uuid.UUID, Form()],
@@ -72,6 +77,7 @@ def create_voice_note(
     response: Response,
     services: Services,
     transcriber: Annotated[Transcriber, Depends(get_transcriber)],
+    classifier: Annotated[CategoryClassifier | None, Depends(get_classifier)],
 ) -> NoteOut:
     data = audio.file.read(MAX_AUDIO_BYTES + 1)
     timer = Timer()
@@ -82,7 +88,7 @@ def create_voice_note(
             path.write_bytes(data)
             check_duration(path)
             with timer:
-                note, created = VoiceNoteService(transcriber, services[0]).create(id, path)
+                note, created = VoiceNoteService(transcriber, services[0], classifier).create(id, path)
     except AudioRejected as exc:
         logger.warning("voice note %s rejected: %s", id, exc.detail)
         raise HTTPException(exc.status_code, exc.detail) from exc

@@ -77,3 +77,23 @@ Signed release (needs an Apple Developer ID certificate and a `notarytool` keych
 6. Deny the microphone in System Settings, press the hotkey: a clear message appears, no crash.
 7. Quit and reopen the app: all stickies return. Switch Spaces: they stay on the desktop.
 8. Menu > Backend URL… with a wrong address: "Backend offline". Back to the right one: stickies return.
+
+## Phase 5: LLM classifier (optional)
+
+When you ask for a category in other words ("put this with my work stuff") and the parser finds no name,
+the backend asks a local Ollama model to pick one of your existing categories. Without Ollama everything
+else works; the note is just saved without a category.
+
+    brew install ollama && ollama serve        # or the Ollama app
+    ollama pull llama3.2:3b                    # about 2 GB, about 2.6 GB of memory when loaded
+
+Settings (environment): `OLLAMA_URL` (default `http://localhost:11434`), `OLLAMA_MODEL` (default
+`llama3.2:3b`), `OLLAMA_TIMEOUT` (seconds, default 5). `GET /health` adds `"ollama": "ok"`,
+`"unreachable"` or `"disabled"`; Ollama being down does not make `/health` fail.
+
+The model only runs when the note has no category name and there is at least one category. It cannot
+create a new category. The first call after a long idle can be slower than the timeout; the backend
+warms the model at startup and keeps it loaded for 30 minutes.
+
+Manual check: create a category (say "buy milk in category Work"), then say "send the report, put this
+with my work stuff": the sticky shows `[Work]`. Stop Ollama and repeat: the sticky still appears, without a category.
